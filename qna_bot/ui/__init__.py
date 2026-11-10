@@ -9,6 +9,7 @@ from qna_bot.ui.components import (
     render_copy_button,
     render_header,
     render_image_upload_section,
+    render_sources_panel,
     render_welcome_screen,
 )
 from qna_bot.ui.sidebar import SidebarConfig, render_sidebar
@@ -23,6 +24,7 @@ __all__ = [
     "render_header",
     "render_image_upload_section",
     "render_sidebar",
+    "render_sources_panel",
     "render_user_message",
     "render_welcome_screen",
 ]

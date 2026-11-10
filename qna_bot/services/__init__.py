@@ -5,6 +5,8 @@ from qna_bot.services.agent_service import (
     build_langchain_messages,
     stream_chunks,
 )
+from qna_bot.services.chat_service import ChatService, ChatTurnResult
+from qna_bot.services.document_service import DocumentService
 from qna_bot.services.export_service import (
     export_as_json,
     export_as_markdown,
@@ -21,6 +23,9 @@ from qna_bot.services.session_service import (
 
 __all__ = [
     "AIAgent",
+    "ChatService",
+    "ChatTurnResult",
+    "DocumentService",
     "build_langchain_messages",
     "clear_current_chat",
     "export_as_json",

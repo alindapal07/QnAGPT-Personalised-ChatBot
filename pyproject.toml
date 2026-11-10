@@ -43,3 +43,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "qna_bot"
 module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--capture=sys"

@@ -33,6 +33,19 @@ def _load_environment_files() -> None:
             load_dotenv(env_path)
 
 
+def _read_streamlit_secret(key: str) -> str:
+    """Safely read an optional Streamlit Cloud secret without requiring runtime context."""
+    try:
+        import streamlit as st
+
+        secrets = getattr(st, "secrets", None)
+        if secrets and key in secrets:
+            return str(secrets[key]).strip()
+    except Exception:
+        return ""
+    return ""
+
+
 @dataclass(frozen=True)
 class AppSettings:
     """Immutable application settings loaded from defaults and environment variables."""
@@ -50,18 +63,41 @@ class AppSettings:
     default_system_prompt: str = DEFAULT_SYSTEM_PROMPT
     max_image_size_mb: int = 10
     allowed_image_types: Tuple[str, ...] = ("png", "jpg", "jpeg", "webp")
-    page_title: str = "AI Assistant"
+    page_title: str = "QnAGPT Assistant"
     page_icon: str = "square"
     log_level: str = "INFO"
     stream_chunk_delay_sec: float = 0.02
 
+    # RAG & Vector Store settings
+    data_dir: Path = PROJECT_ROOT / "data"
+    vector_store_dir: Path = PROJECT_ROOT / "data" / "vector_store"
+    sqlite_db_path: Path = PROJECT_ROOT / "data" / "chatbot.db"
+    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    max_document_size_mb: int = 20
+    allowed_document_types: Tuple[str, ...] = ("pdf", "txt", "docx", "csv")
+    retrieval_top_k: int = 4
+    retrieval_score_threshold: float = 0.2
+    max_retrieval_retries: int = 2
+    max_validation_retries: int = 1
+
+    # Multi-mode & isolation defaults
+    default_user_id: str = "local_user"
+    chat_modes: Tuple[str, ...] = ("Auto (Agentic)", "Document Chat", "General Chat")
+
 
 def load_settings() -> AppSettings:
-    """Load environment files and construct a fresh AppSettings instance."""
+    """Load environment files / secrets and construct a fresh AppSettings instance."""
     _load_environment_files()
+    api_key = os.getenv("GROQ_API_KEY", "").strip() or _read_streamlit_secret("GROQ_API_KEY")
+    data_dir = Path(os.getenv("QNAGPT_DATA_DIR", str(PROJECT_ROOT / "data")))
     return AppSettings(
-        groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
+        groq_api_key=api_key,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip() or "INFO",
+        data_dir=data_dir,
+        vector_store_dir=data_dir / "vector_store",
+        sqlite_db_path=data_dir / "chatbot.db",
     )
 
 

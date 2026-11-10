@@ -6,6 +6,8 @@ import uuid
 
 import streamlit as st
 
+from qna_bot.config.settings import get_settings
+
 _TITLE_MAX_LEN = 36
 
 
@@ -20,9 +22,10 @@ def initialize_session_state(
 ) -> None:
     """Populate missing Streamlit session state keys with default values."""
     target = _resolve_state(state)
+    settings = get_settings()
     defaults: Dict[str, Any] = {
         "messages": [],
-        "current_chat_id": str(uuid.uuid4()),
+        "current_chat_id": f"conversation_{uuid.uuid4().hex[:12]}",
         "recent_chats": [],
         "pending_image": None,
         "feedback": {},
@@ -30,6 +33,9 @@ def initialize_session_state(
         "search_query": "",
         "prompt_to_send": None,
         "uploader_nonce": 0,
+        "doc_uploader_nonce": 0,
+        "user_id": settings.default_user_id,
+        "chat_mode": settings.chat_modes[0],
     }
     for key, value in defaults.items():
         if key not in target:
@@ -79,7 +85,7 @@ def start_new_chat(state: MutableMapping[str, Any] | None = None) -> None:
     target["messages"] = []
     target["pending_image"] = None
     target["feedback"] = {}
-    target["current_chat_id"] = str(uuid.uuid4())
+    target["current_chat_id"] = f"conversation_{uuid.uuid4().hex[:12]}"
     target["confirm_clear"] = False
     target["uploader_nonce"] = int(target.get("uploader_nonce", 0)) + 1
 
@@ -101,7 +107,7 @@ def restore_chat(
     """Load a saved conversation from recent_chats into the active view."""
     target = _resolve_state(state)
     target["messages"] = list(chat.get("messages", []))
-    target["current_chat_id"] = chat.get("id", str(uuid.uuid4()))
+    target["current_chat_id"] = chat.get("id", f"conversation_{uuid.uuid4().hex[:12]}")
     target["pending_image"] = None
     target["feedback"] = {}
     target["confirm_clear"] = False

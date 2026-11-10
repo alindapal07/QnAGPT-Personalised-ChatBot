@@ -15,3 +15,23 @@ class ImageValidationError(QnABotError):
 
 class AgentExecutionError(QnABotError):
     """Raised when the AI agent encounters an error while generating a response."""
+
+
+class DocumentIngestionError(QnABotError):
+    """Raised when document validation, loading, or chunking fails."""
+
+
+class EmbeddingError(QnABotError):
+    """Raised when the local embedding model fails to initialize or encode text."""
+
+
+class VectorStoreError(QnABotError):
+    """Raised when vector index creation, loading, persistence, or search fails."""
+
+
+class ToolExecutionError(QnABotError):
+    """Raised when an external or retrieval tool encounters an unrecoverable error."""
+
+
+class MemoryPersistenceError(QnABotError):
+    """Raised when SQLite checkpointing or thread persistence fails."""

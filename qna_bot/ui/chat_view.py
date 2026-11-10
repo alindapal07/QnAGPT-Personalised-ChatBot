@@ -1,10 +1,10 @@
 """Chat message history and turn rendering components."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import streamlit as st
 
-from qna_bot.ui.components import render_copy_button
+from qna_bot.ui.components import render_copy_button, render_sources_panel
 
 
 def render_user_message(
@@ -32,13 +32,16 @@ def render_ai_message(
     content: str,
     index: int,
     is_last_ai: bool = False,
+    sources: Optional[Sequence[Dict[str, Any]]] = None,
+    web_sources: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> None:
-    """Render an assistant message aligned to the left side with action controls."""
+    """Render an assistant message aligned to the left side with citations and action controls."""
     col_ai, _ = st.columns([4, 1])
     with col_ai:
         st.markdown('<div class="msg-label-ai">Assistant</div>', unsafe_allow_html=True)
         with st.chat_message("assistant"):
             st.markdown(content)
+            render_sources_panel(sources=sources, web_sources=web_sources)
 
         a1, a2, a3, a4, _ = st.columns([1, 1.2, 1, 1.4, 4])
         with a1:
@@ -84,4 +87,6 @@ def render_chat_history(
                 content=content,
                 index=idx,
                 is_last_ai=(idx == last_ai_idx),
+                sources=msg.get("sources"),
+                web_sources=msg.get("web_sources"),
             )

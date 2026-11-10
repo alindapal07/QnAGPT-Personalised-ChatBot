@@ -134,7 +134,12 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
         ):
             qna_app.process_pending_prompt(mock_agent)
 
-        mock_exec.assert_called_once_with(mock_agent, has_image=True)
+        mock_exec.assert_called_once_with(
+            mock_agent,
+            has_image=True,
+            chat_service=None,
+            sidebar_cfg=None,
+        )
         fake_st.rerun.assert_called_once()
 
 

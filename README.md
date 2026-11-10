@@ -1,6 +1,25 @@
-# Enterprise AI Assistant (`qna_bot`)
+# QnAGPT – Personalized Agentic RAG Assistant
 
-A modular, production-structured multimodal AI Q&A chatbot built with **Streamlit**, **LangChain**, and **Groq**.
+An enterprise-grade, multimodal **Agentic RAG Chatbot** built with **Streamlit**, **LangChain**, **LangGraph**, **Groq**, **Hugging Face Embeddings**, **FAISS**, **DuckDuckGo**, and **SQLite**.
+
+---
+
+## Architecture Overview
+
+The application is divided into two cooperating subsystems orchestrated by a compiled **LangGraph `StateGraph`** inside [`qna_bot/`](qna_bot/):
+
+1. **Document Intelligence (`qna_bot/rag/`)**:
+   - Multi-format ingestion for **PDF**, **TXT**, **DOCX**, and **CSV** (`PyPDFLoader`, `TextLoader`, `Docx2txtLoader`, `CSVLoader`).
+   - Size/extension validation, temporary file isolation, text cleaning, recursive chunking (`CHUNK_SIZE = 1000`, `CHUNK_OVERLAP = 200`), and SHA-256 deduplication.
+   - Local **Hugging Face** embeddings (`sentence-transformers/all-MiniLM-L6-v2`, CPU/CUDA, normalized vectors, no OpenAI key required).
+   - User-scoped **FAISS** persistence under `data/vector_store/<user_id>/` with SHA-256 index integrity verification and a modular `VectorStoreBackend` interface ready for future Qdrant Cloud migration.
+2. **Agentic Intelligence (`qna_bot/agent/` & `qna_bot/tools/`)**:
+   - Stateful **LangGraph `StateGraph`** with conditional routing and bounded retries:
+     `analyze_query` -> (`direct_answer` + `ToolNode` | `rewrite_query` -> `retrieve_documents` -> `grade_documents` | `web_search`) -> `generate_answer` -> `validate_answer`.
+   - **Query Analysis & Rewriting**: Classifies queries (`GENERAL`, `DOCUMENT`, `WEB_SEARCH`, `FOLLOW_UP`) and turns conversational follow-ups into standalone search queries.
+   - **Document Grading & Validation**: Filters irrelevant chunks, prevents infinite loops (`max_retrieval_retries = 2`, `max_validation_retries = 1`), and validates document-grounded citations.
+   - **Web Search & Tools**: DuckDuckGo search preserving source URLs alongside user-scoped document tools (`retrieve_uploaded_documents`, `summarize_uploaded_documents`).
+   - **Persistent SQLite Memory**: `langgraph-checkpoint-sqlite` (`SqliteSaver`) in `data/chatbot.db` with unique `thread_id`s and server-side `user_id` isolation.
 
 ---
 
@@ -8,64 +27,63 @@ A modular, production-structured multimodal AI Q&A chatbot built with **Streamli
 
 ```text
 langchain_01/
-├── qna_bot/                     # Production application package
-│   ├── __init__.py              # Package metadata & public exports
-│   ├── __main__.py              # `python -m qna_bot` entry point
-│   ├── app.py                   # Streamlit orchestrator entry point
-│   ├── cli.py                   # CLI launcher (`qna-bot`)
+├── qna_bot/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── app.py                      # Streamlit entrypoint & workflow orchestrator
+│   ├── cli.py                      # CLI runner (`qna-bot`)
 │   ├── config/
 │   │   ├── __init__.py
-│   │   └── settings.py          # Immutable AppSettings & .env loading
+│   │   └── settings.py             # Immutable AppSettings, .env & Streamlit secrets support
 │   ├── core/
 │   │   ├── __init__.py
-│   │   ├── exceptions.py        # Domain-specific exception hierarchy
-│   │   └── logging_config.py    # Idempotent structured logging setup
+│   │   ├── exceptions.py           # Typed domain exceptions
+│   │   └── logging_config.py       # Idempotent structured logger
+│   ├── agent/
+│   │   ├── __init__.py
+│   │   ├── graph.py                # Compiled LangGraph StateGraph + SqliteSaver
+│   │   ├── memory.py               # Thread management & SQLite checkpointing
+│   │   ├── nodes.py                # All 8 graph nodes + ToolNode wiring
+│   │   ├── prompts.py              # Classification, rewrite, RAG & validation prompts
+│   │   ├── routing.py              # Deterministic conditional edge routers
+│   │   └── state.py                # Typed AgentState with add_messages
+│   ├── rag/
+│   │   ├── __init__.py
+│   │   ├── chunking.py             # Text cleaning & RecursiveCharacterTextSplitter
+│   │   ├── embeddings.py           # Lazy singleton HuggingFaceEmbeddings
+│   │   ├── grader.py               # Relevance grading (RELEVANT/PARTIALLY_RELEVANT/IRRELEVANT)
+│   │   ├── ingestion.py            # Validation, deduplication & batch indexing
+│   │   ├── loaders.py              # PDF, TXT, DOCX, CSV document loaders
+│   │   ├── retriever.py            # User-scoped top-k & MMR retriever
+│   │   └── vector_store.py         # VectorStoreBackend & verified FAISS persistence
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── document_tools.py       # User-isolated LangChain document tools
+│   │   └── web_search.py           # DuckDuckGo web search tool & URL preservation
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── agent_service.py     # LangChain + ChatGroq routing & streaming
-│   │   ├── export_service.py    # JSON, Markdown, and TXT export serializers
-│   │   ├── image_service.py     # Image validation, MIME detection & base64 encoding
-│   │   └── session_service.py   # Session state lifecycle & recent chat storage
+│   │   ├── agent_service.py        # ChatGroq streaming & multimodal vision fallback
+│   │   ├── chat_service.py         # LangGraph turn execution & thread persistence
+│   │   ├── document_service.py     # Knowledge base upload, listing & removal
+│   │   ├── export_service.py       # JSON, Markdown & TXT chat exporters
+│   │   ├── image_service.py        # Image validation & base64 encoding
+│   │   └── session_service.py      # Streamlit session state lifecycle
 │   └── ui/
 │       ├── __init__.py
 │       ├── assets/
-│       │   ├── styles.css       # Light, Dark & Auto semantic CSS variables
-│       │   └── theme.js         # Dynamic theme attribute synchronization
-│       ├── chat_view.py         # Chat history & message action controls
-│       ├── components.py        # Header, welcome screen, copy button & image uploader
-│       ├── sidebar.py           # Navigation, search, recent chats, settings & export
-│       └── styles.py            # Cached stylesheet/script asset injector
-│
-├── tests/                       # Automated unit & Streamlit AppTest suite
-├── archive/                     # Non-production, experimental & legacy files
-├── .env.example                 # Environment variable template
-├── pyproject.toml               # Package metadata & dependencies
-├── requirements.txt             # Pip-compatible dependency list
-└── uv.lock                      # Locked dependency graph
+│       │   ├── styles.css          # Light, Dark & Auto semantic CSS
+│       │   └── theme.js            # Dynamic theme synchronization
+│       ├── chat_view.py            # Chat bubbles, citations & action controls
+│       ├── components.py           # Header, welcome, sources panel, copy & image UI
+│       ├── sidebar.py              # Mode selector, KB manager, threads, settings, export
+│       └── styles.py               # Cached asset injector
+├── tests/                          # Pytest test suite
+├── archive/                        # Reference / non-production legacy files
+├── .env.example                    # Environment template
+├── pyproject.toml                  # Dependencies & pytest/uv config
+├── requirements.txt                # Pip requirements (Streamlit Cloud compatible)
+└── uv.lock                         # Locked uv dependency graph
 ```
-
----
-
-## Production Coding Flow
-
-The codebase separates concerns into four strict layers so UI, business logic, configuration, and infrastructure remain decoupled and testable:
-
-1. **Configuration (`qna_bot/config/`)**: Loads `.env` safely and provides a typed, immutable `AppSettings` object (`get_settings()`).
-2. **Core Infrastructure (`qna_bot/core/`)**: Provides domain exceptions (`ConfigurationError`, `ImageValidationError`, `AgentExecutionError`) and idempotent logging (`configure_logging()`).
-3. **Services (`qna_bot/services/`)**: Pure business logic with no Streamlit rendering dependencies (except `session_service` abstracting `st.session_state`):
-   - `agent_service.py`: Converts conversation history into LangChain messages (`SystemMessage`, `HumanMessage`, `AIMessage`), routes text queries to the selected text model and image queries to the vision model, and streams response chunks.
-   - `image_service.py`: Validates uploaded image size (`<= 10 MB`), verifies format/integrity via Pillow, and returns base64 payloads.
-   - `export_service.py`: Serializes chat history to JSON, Markdown, and plain text.
-   - `session_service.py`: Manages session initialization, new/clear chat transitions, and recent conversation snapshots.
-4. **Presentation (`qna_bot/ui/`) & Orchestrator (`qna_bot/app.py`)**: `app.py` orchestrates page config, styling, sidebar controls, user submissions, and AI streaming turns using modular UI components.
-
----
-
-## Models & Multimodal Handling
-
-- **Text Models** (selectable in sidebar): `openai/gpt-oss-20b` (default), `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`
-- **Vision Model** (auto-routed when an image is attached): `qwen/qwen3.8-27b`
-- **Supported Image Formats**: `png`, `jpg`, `jpeg`, `webp` (up to 10 MB)
 
 ---
 
@@ -83,24 +101,24 @@ Or using `pip`:
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the repository root (see `.env.example`):
+Create a `.env` file in the repository root (see [`.env.example`](.env.example)):
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
 LOG_LEVEL=INFO
 ```
 
+*No `OPENAI_API_KEY` is required. Embeddings run locally via `sentence-transformers/all-MiniLM-L6-v2`.*
+
 ---
 
-## Running the Application
-
-From the repository root:
+## Running Locally
 
 ```bash
 uv run streamlit run qna_bot/app.py
 ```
 
-Or using the installed CLI / module entrypoint:
+Alternative entrypoints:
 
 ```bash
 uv run qna-bot
@@ -108,16 +126,30 @@ uv run qna-bot
 python -m qna_bot
 ```
 
-Or from inside `qna_bot/`:
+---
+
+## Chat Modes & Features
+
+- **Auto (Agentic)**: Classifies intent, routes between general conversation, RAG over uploaded documents, tool calling, and DuckDuckGo web search automatically.
+- **Document Chat**: Prioritizes retrieval, semantic grading, citation validation, and expandable document source previews (filename + page number).
+- **General Chat**: Direct Groq conversation and existing multimodal vision analysis (`PNG`, `JPG`, `JPEG`, `WEBP`).
+- **Workspace Isolation**: Documents and SQLite conversation threads are partitioned by `user_id` (`Workspace ID`) on the server side.
+
+---
+
+## Testing
 
 ```bash
-streamlit run app.py
+pytest -v
 ```
 
 ---
 
-## Running Tests
+## Streamlit Community Cloud Deployment
 
-```bash
-python -m unittest discover -s tests -v
-```
+1. Push the repository (without `.env`) to GitHub.
+2. In Streamlit Community Cloud, set the **Main file path** to `qna_bot/app.py`.
+3. Add `GROQ_API_KEY` under **App Settings -> Secrets** (`settings.py` reads both environment variables and `st.secrets`).
+4. Dependencies are picked up automatically from `requirements.txt` / `pyproject.toml`.
+
+> **Persistence Note:** Local FAISS indexes (`data/vector_store/`) and SQLite files (`data/chatbot.db`) are suitable for local/single-instance usage, whereas ephemeral cloud containers reset local disk on restart. `VectorStoreBackend` in `qna_bot/rag/vector_store.py` is structured so you can swap in **Qdrant Cloud** and managed PostgreSQL for multi-user cloud persistence without rewriting the RAG or LangGraph pipeline.

@@ -1,8 +1,9 @@
-"""Reusable Streamlit UI components (header, welcome screen, copy button, image uploader)."""
+"""Reusable Streamlit UI components (header, welcome screen, copy button, sources, image uploader)."""
 
 import base64
 import html
 import json
+from typing import Any, Dict, Optional, Sequence
 
 import streamlit as st
 
@@ -120,16 +121,22 @@ def render_copy_button(text: str, button_id: str) -> None:
         components.html(html_code, height=28)
 
 
-def render_header(model_name: str) -> None:
-    """Render subtle enterprise top header."""
+def render_header(model_name: str, chat_mode: Optional[str] = None) -> None:
+    """Render subtle enterprise top header with active model and chat mode."""
     escaped_model = html.escape(model_name)
+    mode_html = (
+        f"Mode:&nbsp;<code>{html.escape(chat_mode)}</code>&nbsp;&nbsp;"
+        if chat_mode
+        else ""
+    )
     st.markdown(
         f"""
         <div class="app-header">
-            <span class="app-header-title">AI Assistant</span>
+            <span class="app-header-title">QnAGPT Assistant</span>
             <span class="app-header-meta">
+                {mode_html}
                 Model:&nbsp;<code>{escaped_model}</code>&nbsp;&nbsp;
-                Powered by Groq
+                Powered by Groq &amp; LangGraph
             </span>
         </div>
         """,
@@ -142,9 +149,9 @@ def render_welcome_screen() -> None:
     st.markdown(
         """
         <div class="welcome-wrap">
-            <div class="welcome-title">AI Assistant</div>
+            <div class="welcome-title">QnAGPT Assistant</div>
             <div class="welcome-sub">
-                Ask questions, analyze information, or upload an image.
+                Ask general questions, chat with uploaded documents (PDF, TXT, DOCX, CSV), search the web, or attach an image.
             </div>
         </div>
         """,
@@ -158,6 +165,67 @@ def render_welcome_screen() -> None:
             if st.button(label, key=f"sug_{idx}", use_container_width=True):
                 st.session_state.prompt_to_send = prompt
                 st.rerun()
+
+
+def render_sources_panel(
+    sources: Optional[Sequence[Dict[str, Any]]] = None,
+    web_sources: Optional[Sequence[Dict[str, Any]]] = None,
+) -> None:
+    """Render deduplicated document citations separately from external web sources."""
+    doc_list = list(sources or [])
+    web_list = list(web_sources or [])
+    if not doc_list and not web_list:
+        return
+
+    total = len(doc_list) + len(web_list)
+    with st.expander(f"Sources ({total})", expanded=False):
+        if doc_list:
+            st.markdown("**Document Sources**")
+            for idx, src in enumerate(doc_list, start=1):
+                filename = html.escape(str(src.get("source", "Document")))
+                page = src.get("page")
+                page_text = f" &bull; Page {int(page)}" if page is not None else ""
+                excerpt = html.escape(str(src.get("excerpt", "")))
+                excerpt_html = (
+                    f'<div class="source-card-snippet">{excerpt}</div>'
+                    if excerpt
+                    else ""
+                )
+                st.markdown(
+                    f"""
+                    <div class="source-card">
+                        <div class="source-card-meta">{idx}. {filename}{page_text}</div>
+                        {excerpt_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        if web_list:
+            st.markdown("**Web Sources**")
+            for idx, web in enumerate(web_list, start=1):
+                title = html.escape(str(web.get("title", "Web Result")))
+                url = str(web.get("url", "")).strip()
+                snippet = html.escape(str(web.get("snippet", "")))
+                link_html = (
+                    f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+                    if url.startswith(("http://", "https://"))
+                    else title
+                )
+                snippet_html = (
+                    f'<div class="source-card-snippet">{snippet}</div>'
+                    if snippet
+                    else ""
+                )
+                st.markdown(
+                    f"""
+                    <div class="source-card">
+                        <div class="source-card-meta">{idx}. {link_html}</div>
+                        {snippet_html}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 def render_image_upload_section(settings: AppSettings) -> None:
