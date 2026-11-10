@@ -1,7 +1,7 @@
 [project]
-name = "langchain-01"
+name = "qna-bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Production-grade multimodal AI Q&A chatbot powered by Streamlit, LangChain, and Groq."
 readme = "README.md"
 authors = [
     { name = "alindapal07", email = "151637518+alindapal07@users.noreply.github.com" }
@@ -17,13 +17,18 @@ dependencies = [
     "langchain-openai>=1.6.7",
     "langgraph>=1.2.13",
     "notebook>=7.6.3",
+    "pillow>=12.3.0",
     "python-dotenv>=1.2.4",
     "streamlit>=1.65.0",
 ]
 
 [project.scripts]
-langchain-01 = "langchain_01:main"
+qna-bot = "qna_bot.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "qna_bot"
+module-root = ""

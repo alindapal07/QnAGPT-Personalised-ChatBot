@@ -1,12 +1,3 @@
-"""
-styles.py — Centralized semantic theme system and styling for Streamlit.
-Supports Light, Dark, and Auto (system) themes seamlessly.
-NO AI logic, NO model calls, NO conversation state.
-"""
-import streamlit as st
-
-THEME_CSS = """
-<style>
 /* ═══════════════════════════════════════════════════════════════════════════
    1. SEMANTIC THEME VARIABLES
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -34,6 +25,7 @@ body[data-theme="light"] {
     --upload-background:   #FFFFFF;
     --upload-file-bg:      #F8F9FA;
     --dot-status:          #15803D;
+    --dot-error:           #DC2626;
 }
 
 /* System / Browser dark preference (when not explicitly overridden to light) */
@@ -59,6 +51,7 @@ body[data-theme="light"] {
         --upload-background:   #181C24;
         --upload-file-bg:      #20242D;
         --dot-status:          #4ADE80;
+        --dot-error:           #F87171;
     }
 }
 
@@ -85,6 +78,7 @@ body[data-theme="dark"],
     --upload-background:   #181C24;
     --upload-file-bg:      #20242D;
     --dot-status:          #4ADE80;
+    --dot-error:           #F87171;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -166,12 +160,22 @@ section[data-testid="stSidebar"] > div:first-child {
     margin-bottom: 0.75rem;
 }
 
-.sb-status .dot-status {
+.sb-status .dot-status,
+.sb-status .dot-ok,
+.sb-status .dot-err {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--dot-status);
     flex-shrink: 0;
+}
+
+.sb-status .dot-status,
+.sb-status .dot-ok {
+    background: var(--dot-status);
+}
+
+.sb-status .dot-err {
+    background: var(--dot-error);
 }
 
 .sb-divider {
@@ -571,59 +575,3 @@ a:hover {
         padding: 0 0.75rem 4.5rem;
     }
 }
-</style>
-
-<script>
-(function() {
-    function detectAndApplyTheme() {
-        const app = document.querySelector('.stApp') || document.body;
-        let isDark = false;
-        if (app) {
-            const bg = window.getComputedStyle(app).backgroundColor;
-            const m = bg.match(/\\d+/g);
-            if (m && m.length >= 3) {
-                // Calculate perceived luminance: 0.299*R + 0.587*G + 0.114*B
-                const lum = 0.299 * parseInt(m[0]) + 0.587 * parseInt(m[1]) + 0.114 * parseInt(m[2]);
-                isDark = lum < 128;
-            } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                isDark = true;
-            }
-        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            isDark = true;
-        }
-
-        const themeStr = isDark ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', themeStr);
-        document.body.setAttribute('data-theme', themeStr);
-        if (app) {
-            app.setAttribute('data-theme', themeStr);
-        }
-    }
-
-    // Run on startup
-    detectAndApplyTheme();
-    setTimeout(detectAndApplyTheme, 150);
-    setTimeout(detectAndApplyTheme, 500);
-
-    // Observe background color changes on .stApp when user toggles Theme in Streamlit Settings
-    try {
-        const observer = new MutationObserver(function() {
-            detectAndApplyTheme();
-        });
-        const target = document.querySelector('.stApp') || document.body;
-        if (target) {
-            observer.observe(target, { attributes: true, attributeFilter: ['class', 'style'] });
-        }
-    } catch(e) {}
-
-    // Also listen for system theme changes
-    if (window.matchMedia) {
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', detectAndApplyTheme);
-    }
-})();
-</script>
-"""
-
-def apply_styles() -> None:
-    """Inject theme-aware CSS and dynamic theme detection script."""
-    st.markdown(THEME_CSS, unsafe_allow_html=True)

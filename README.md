@@ -1,67 +1,114 @@
-# Enterprise AI Assistant
+# Enterprise AI Assistant (`qna_bot`)
 
-A clean, modular, production-grade AI chat application built with Streamlit, LangChain, and Groq.
+A modular, production-structured multimodal AI Q&A chatbot built with **Streamlit**, **LangChain**, and **Groq**.
 
 ---
 
-## Architecture
+## Project Structure
 
-The project is structured into clean, decoupled modules:
-
-```
-qna_bot/
+```text
+langchain_01/
+├── qna_bot/                     # Production application package
+│   ├── __init__.py              # Package metadata & public exports
+│   ├── __main__.py              # `python -m qna_bot` entry point
+│   ├── app.py                   # Streamlit orchestrator entry point
+│   ├── cli.py                   # CLI launcher (`qna-bot`)
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── settings.py          # Immutable AppSettings & .env loading
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── exceptions.py        # Domain-specific exception hierarchy
+│   │   └── logging_config.py    # Idempotent structured logging setup
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── agent_service.py     # LangChain + ChatGroq routing & streaming
+│   │   ├── export_service.py    # JSON, Markdown, and TXT export serializers
+│   │   ├── image_service.py     # Image validation, MIME detection & base64 encoding
+│   │   └── session_service.py   # Session state lifecycle & recent chat storage
+│   └── ui/
+│       ├── __init__.py
+│       ├── assets/
+│       │   ├── styles.css       # Light, Dark & Auto semantic CSS variables
+│       │   └── theme.js         # Dynamic theme attribute synchronization
+│       ├── chat_view.py         # Chat history & message action controls
+│       ├── components.py        # Header, welcome screen, copy button & image uploader
+│       ├── sidebar.py           # Navigation, search, recent chats, settings & export
+│       └── styles.py            # Cached stylesheet/script asset injector
 │
-├── app.py          # Application entry point & orchestration
-├── agent.py        # LangChain & ChatGroq AI logic (text & multimodal)
-├── styles.py       # Theme-aware CSS (Light, Dark, and Auto)
-├── ui.py           # Streamlit UI presentation & layout components
-├── config.py       # Configuration & environment variables
-└── requirement.txt # Project dependencies
+├── tests/                       # Automated unit & Streamlit AppTest suite
+├── archive/                     # Non-production, experimental & legacy files
+├── .env.example                 # Environment variable template
+├── pyproject.toml               # Package metadata & dependencies
+├── requirements.txt             # Pip-compatible dependency list
+└── uv.lock                      # Locked dependency graph
 ```
 
-- **`app.py`**: Lightweight orchestrator managing session state, theme loading, and calling UI/agent workflows.
-- **`agent.py`**: Encapsulates `ChatGroq`, multimodal message construction, streaming responses, and routing.
-- **`styles.py`**: Pure CSS variables (`--app-bg`, `--surface`, `--border`, `--upload-bg`, etc.) supporting Streamlit's Light, Dark, and Auto themes. Preserves native sidebar collapse/reopen toggle.
-- **`ui.py`**: Pure Streamlit rendering functions for header, sidebar, chat rows (User on RIGHT, AI on LEFT), image previews, and JS-based copy actions.
-- **`config.py`**: Centralized constants, model identifiers, token limits, and environment variable loading.
+---
+
+## Production Coding Flow
+
+The codebase separates concerns into four strict layers so UI, business logic, configuration, and infrastructure remain decoupled and testable:
+
+1. **Configuration (`qna_bot/config/`)**: Loads `.env` safely and provides a typed, immutable `AppSettings` object (`get_settings()`).
+2. **Core Infrastructure (`qna_bot/core/`)**: Provides domain exceptions (`ConfigurationError`, `ImageValidationError`, `AgentExecutionError`) and idempotent logging (`configure_logging()`).
+3. **Services (`qna_bot/services/`)**: Pure business logic with no Streamlit rendering dependencies (except `session_service` abstracting `st.session_state`):
+   - `agent_service.py`: Converts conversation history into LangChain messages (`SystemMessage`, `HumanMessage`, `AIMessage`), routes text queries to the selected text model and image queries to the vision model, and streams response chunks.
+   - `image_service.py`: Validates uploaded image size (`<= 10 MB`), verifies format/integrity via Pillow, and returns base64 payloads.
+   - `export_service.py`: Serializes chat history to JSON, Markdown, and plain text.
+   - `session_service.py`: Manages session initialization, new/clear chat transitions, and recent conversation snapshots.
+4. **Presentation (`qna_bot/ui/`) & Orchestrator (`qna_bot/app.py`)**: `app.py` orchestrates page config, styling, sidebar controls, user submissions, and AI streaming turns using modular UI components.
 
 ---
 
 ## Models & Multimodal Handling
 
-- **Text Model**: `openai/gpt-oss-20b` (Default, selectable in sidebar: `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`)
-- **Vision Model**: `qwen/qwen3.8-27b` (Automatically routed when an image is attached)
-- **Automatic Routing**: Normal text questions are handled by the selected text model. Whenever an image is uploaded (PNG, JPG, JPEG, WEBP), requests are routed to the vision model with full streaming responses.
+- **Text Models** (selectable in sidebar): `openai/gpt-oss-20b` (default), `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`
+- **Vision Model** (auto-routed when an image is attached): `qwen/qwen3.8-27b`
+- **Supported Image Formats**: `png`, `jpg`, `jpeg`, `webp` (up to 10 MB)
 
 ---
 
-## Installation
+## Setup & Installation
+
+Using `uv` (recommended):
 
 ```bash
-pip install -r requirement.txt
+uv sync
 ```
 
----
+Or using `pip`:
 
-## Environment Variables
+```bash
+pip install -r requirements.txt
+```
 
-Create a `.env` file in the project root:
+Create a `.env` file in the repository root (see `.env.example`):
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
+LOG_LEVEL=INFO
 ```
 
 ---
 
 ## Running the Application
 
-From the project root:
+From the repository root:
 
 ```bash
-streamlit run langchain_01/qna_bot/app.py
+uv run streamlit run qna_bot/app.py
 ```
 
-Or from within `langchain_01/qna_bot/`:
+Or using the installed CLI / module entrypoint:
+
+```bash
+uv run qna-bot
+# or
+python -m qna_bot
+```
+
+Or from inside `qna_bot/`:
 
 ```bash
 streamlit run app.py
@@ -69,11 +116,8 @@ streamlit run app.py
 
 ---
 
-## Key Features
+## Running Tests
 
-1. **Enterprise Theme Support**: Automatically respects Streamlit's Light, Dark, and Auto themes. All elements—including the image uploader, dropzone, text inputs, and buttons—adapt seamlessly with zero contrast issues.
-2. **Native Sidebar Controls**: Fully collapsible sidebar that preserves Streamlit's native reopen toggle (`collapsedControl`).
-3. **ChatGPT-Style Layout**: User messages are aligned to the **RIGHT**; AI messages are aligned to the **LEFT**.
-4. **Multimodal Image Support**: Attach PNG, JPG, JPEG, and WEBP images with live previews, removal controls, and inline message rendering.
-5. **Real Streaming & Action Controls**: Smooth token streaming with inline copy (copies to clipboard and displays "Copied" for 1.8s without opening modals), regenerate, and feedback controls.
-
+```bash
+python -m unittest discover -s tests -v
+```
