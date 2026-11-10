@@ -61,24 +61,66 @@ def test_alembic_upgrade_wal_foreign_keys_and_legacy_migration(tmp_path: Path) -
     finally:
         db.close()
 
-    # Verify non-destructive upgrade against existing legacy schema
+    # Verify non-destructive Alembic upgrade & claim against a pre-existing legacy DB
+    from qna_bot.agent.memory import ConversationMemoryManager
+    from qna_bot.database.connection import DatabaseManager
+    from qna_bot.database.models import MCPServerRecord
+    from qna_bot.database.repositories import MCPServerRepository
+
     live_copy = tmp_path / "legacy_copy.db"
-    src_live = Path("data/chatbot.db")
-    if src_live.is_file():
-        shutil.copy2(src_live, live_copy)
-        cfg2 = Config("alembic.ini")
-        cfg2.set_main_option("sqlalchemy.url", f"sqlite:///{live_copy.as_posix()}")
-        command.upgrade(cfg2, "head")
-        db2 = SQLAlchemyDatabase(live_copy, auto_create=False)
-        try:
-            sync = ensure_legacy_workspace_synced(db2)
-            assert sync["threads_migrated"] >= 1
-            owner = UserRepository(db2).create_user("owner@company.com", full_name="Owner", is_verified=True)
-            claimed = claim_legacy_workspace(db2, owner.id)
-            assert claimed.get("conversations", 0) >= 1
-            assert len(ConversationRepository(db2).list_for_user(owner.id)) >= 1
-        finally:
-            db2.close()
+    mem = ConversationMemoryManager(db_path=live_copy)
+    tid = mem.create_new_thread("local_user", title="Legacy Cloud Thread")
+    mem.append_message(tid, "local_user", {"role": "user", "content": "Legacy question"})
+    mem.close()
+    raw_db = DatabaseManager(db_path=live_copy)
+    MCPServerRepository(raw_db).upsert(
+        MCPServerRecord(server_id="srv_leg", user_id="local_user", name="LegacyMCP", transport="streamable_http", url="https://mcp.example.com")
+    )
+    raw_db.close()
+
+    cfg2 = Config("alembic.ini")
+    cfg2.set_main_option("sqlalchemy.url", f"sqlite:///{live_copy.as_posix()}")
+    command.upgrade(cfg2, "head")
+    db2 = SQLAlchemyDatabase(live_copy, auto_create=False)
+    try:
+        sync = ensure_legacy_workspace_synced(db2)
+        assert sync["threads_migrated"] == 1
+        assert sync["messages_migrated"] == 1
+        owner = UserRepository(db2).create_user("owner@company.com", full_name="Owner", is_verified=True)
+        claimed = claim_legacy_workspace(db2, owner.id)
+        assert claimed.get("conversations", 0) == 1
+        assert claimed.get("mcp_servers", 0) == 1
+        assert len(ConversationRepository(db2).list_for_user(owner.id)) == 1
+    finally:
+        db2.close()
+
+    # Verify old legacy schema missing optional columns (is_pinned, tool_events_json) syncs cleanly
+    old_db_file = tmp_path / "ancient_legacy.db"
+    import sqlite3
+
+    raw_conn = sqlite3.connect(str(old_db_file))
+    raw_conn.execute(
+        "CREATE TABLE threads (thread_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, chat_mode TEXT, created_at REAL, updated_at REAL)"
+    )
+    raw_conn.execute(
+        "CREATE TABLE thread_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT, content TEXT, timestamp REAL)"
+    )
+    raw_conn.execute(
+        "INSERT INTO threads VALUES ('th_old_1', 'local_user', 'Old Thread', 'General Chat', 1700000000.0, 1700000000.0)"
+    )
+    raw_conn.execute(
+        "INSERT INTO thread_messages (thread_id, user_id, role, content, timestamp) VALUES ('th_old_1', 'local_user', 'user', 'Hello old schema', 1700000000.0)"
+    )
+    raw_conn.commit()
+    raw_conn.close()
+
+    old_orm_db = SQLAlchemyDatabase(old_db_file, auto_create=True)
+    try:
+        old_sync = ensure_legacy_workspace_synced(old_orm_db)
+        assert old_sync["threads_migrated"] == 1
+        assert old_sync["messages_migrated"] == 1
+    finally:
+        old_orm_db.close()
 
 
 def test_password_auth_rate_limiting_sessions_and_account_deletion(tmp_path: Path) -> None:
