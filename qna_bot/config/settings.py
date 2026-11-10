@@ -213,7 +213,7 @@ def load_settings() -> AppSettings:
         storage_dir=storage_dir,
         vector_store_dir=data_dir / "vector_store",
         sqlite_db_path=sqlite_db_path,
-        database_url=os.getenv("DATABASE_URL", "").strip(),
+        database_url=_read_config_value("DATABASE_URL"),
         langgraph_checkpoint_db=checkpoint_db_path,
         qdrant_mode=qdrant_mode,
         qdrant_url=qdrant_url,
@@ -226,18 +226,15 @@ def load_settings() -> AppSettings:
         google_client_secret=_read_config_value("GOOGLE_CLIENT_SECRET"),
         github_client_id=_read_config_value("GITHUB_CLIENT_ID"),
         github_client_secret=_read_config_value("GITHUB_CLIENT_SECRET"),
-        official_registry_url=os.getenv(
+        official_registry_url=_read_config_value(
             "MCP_REGISTRY_URL", "https://registry.modelcontextprotocol.io"
-        ).strip()
-        or "https://registry.modelcontextprotocol.io",
-        glama_api_url=os.getenv("GLAMA_API_URL", "https://glama.ai/api/mcp/v1").strip()
-        or "https://glama.ai/api/mcp/v1",
+        ),
+        glama_api_url=_read_config_value("GLAMA_API_URL", "https://glama.ai/api/mcp/v1"),
         glama_api_key=glama_key,
         credential_encryption_key=cred_key,
-        oauth_redirect_uri=os.getenv(
+        oauth_redirect_uri=_read_config_value(
             "QNAGPT_OAUTH_REDIRECT_URI", "http://localhost:8501/oauth/callback"
-        ).strip()
-        or "http://localhost:8501/oauth/callback",
+        ),
         registry_cache_ttl_sec=max(30, cache_ttl),
     )
 
