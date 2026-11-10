@@ -105,6 +105,7 @@ class DocumentIngestor:
                     "filename": clean_name,
                     "file_hash": file_hash,
                     "file_type": file_type,
+                    "file_size_bytes": len(file_bytes or b""),
                     "page_count": page_count,
                     "created_at": time.time(),
                 },

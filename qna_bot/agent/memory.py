@@ -1,5 +1,6 @@
 """SQLite conversation persistence, thread ownership enforcement, and LangGraph SqliteSaver."""
 
+from datetime import datetime
 import json
 from pathlib import Path
 import sqlite3
@@ -16,7 +17,23 @@ from qna_bot.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-_TITLE_MAX_LEN = 36
+_TITLE_MAX_LEN = 120
+
+
+def classify_time_bucket(timestamp: float, now_ts: Optional[float] = None) -> str:
+    """Group conversation timestamps into UI history sections."""
+    now_dt = datetime.fromtimestamp(now_ts if now_ts is not None else time.time()).date()
+    msg_dt = datetime.fromtimestamp(timestamp).date()
+    delta_days = (now_dt - msg_dt).days
+    if delta_days <= 0:
+        return "Today"
+    if delta_days == 1:
+        return "Yesterday"
+    if delta_days <= 7:
+        return "Previous 7 Days"
+    if delta_days <= 30:
+        return "Previous 30 Days"
+    return "Older"
 
 
 class ConversationMemoryManager:
@@ -46,11 +63,21 @@ class ConversationMemoryManager:
                     user_id TEXT NOT NULL,
                     title TEXT NOT NULL,
                     chat_mode TEXT NOT NULL,
+                    is_pinned INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 )
                 """
             )
+            cols = {
+                row["name"]
+                for row in self._conn.execute("PRAGMA table_info(threads)").fetchall()
+            }
+            if "is_pinned" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE threads ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
+                )
+
             self._conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS thread_messages (
@@ -61,6 +88,7 @@ class ConversationMemoryManager:
                     content TEXT NOT NULL,
                     sources_json TEXT NOT NULL DEFAULT '[]',
                     web_sources_json TEXT NOT NULL DEFAULT '[]',
+                    tool_events_json TEXT NOT NULL DEFAULT '[]',
                     image_b64 TEXT,
                     image_mime TEXT,
                     timestamp REAL NOT NULL,
@@ -68,8 +96,17 @@ class ConversationMemoryManager:
                 )
                 """
             )
+            msg_cols = {
+                row["name"]
+                for row in self._conn.execute("PRAGMA table_info(thread_messages)").fetchall()
+            }
+            if "tool_events_json" not in msg_cols:
+                self._conn.execute(
+                    "ALTER TABLE thread_messages ADD COLUMN tool_events_json TEXT NOT NULL DEFAULT '[]'"
+                )
+
             self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id, updated_at DESC)"
+                "CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id, is_pinned DESC, updated_at DESC)"
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_msgs_thread ON thread_messages(thread_id, user_id, id)"
@@ -133,8 +170,9 @@ class ConversationMemoryManager:
                 self._verify_thread_ownership(tid, uid)
                 self._conn.execute(
                     """
-                    INSERT OR IGNORE INTO threads (thread_id, user_id, title, chat_mode, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO threads (
+                        thread_id, user_id, title, chat_mode, is_pinned, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 0, ?, ?)
                     """,
                     (tid, uid, title, chat_mode, now, now),
                 )
@@ -158,6 +196,49 @@ class ConversationMemoryManager:
             chat_mode=chat_mode,
             thread_id=thread_id,
         )
+
+    def rename_thread(self, thread_id: str, user_id: str, new_title: str) -> bool:
+        """Rename a conversation thread owned by user_id."""
+        tid, uid = self._validate_ids(thread_id, user_id)
+        cleaned = (new_title or "").strip()
+        if not cleaned:
+            raise MemoryPersistenceError("Thread title cannot be empty.")
+        with self._lock:
+            try:
+                assert self._conn is not None
+                self._verify_thread_ownership(tid, uid)
+                cur = self._conn.execute(
+                    """
+                    UPDATE threads
+                    SET title = ?, updated_at = ?
+                    WHERE thread_id = ? AND user_id = ?
+                    """,
+                    (cleaned[:80], time.time(), tid, uid),
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except MemoryPersistenceError:
+                raise
+            except Exception as exc:
+                raise MemoryPersistenceError(f"Failed renaming thread: {exc}") from exc
+
+    def set_thread_pinned(self, thread_id: str, user_id: str, pinned: bool) -> bool:
+        """Pin or unpin a conversation thread owned by user_id."""
+        tid, uid = self._validate_ids(thread_id, user_id)
+        with self._lock:
+            try:
+                assert self._conn is not None
+                self._verify_thread_ownership(tid, uid)
+                cur = self._conn.execute(
+                    "UPDATE threads SET is_pinned = ? WHERE thread_id = ? AND user_id = ?",
+                    (1 if pinned else 0, tid, uid),
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except MemoryPersistenceError:
+                raise
+            except Exception as exc:
+                raise MemoryPersistenceError(f"Failed pinning thread: {exc}") from exc
 
     def update_thread_title(
         self,
@@ -211,7 +292,7 @@ class ConversationMemoryManager:
         user_id: str,
         message: Dict[str, Any],
     ) -> None:
-        """Persist a single UI chat message (with citations/attachments) scoped to user_id."""
+        """Persist a single UI chat message (with citations/tool events/attachments) scoped to user_id."""
         tid, uid = self._validate_ids(thread_id, user_id)
         with self._lock:
             try:
@@ -221,8 +302,9 @@ class ConversationMemoryManager:
                     """
                     INSERT INTO thread_messages (
                         thread_id, user_id, role, content,
-                        sources_json, web_sources_json, image_b64, image_mime, timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        sources_json, web_sources_json, tool_events_json,
+                        image_b64, image_mime, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         tid,
@@ -231,6 +313,7 @@ class ConversationMemoryManager:
                         str(message.get("content", "")),
                         json.dumps(message.get("sources") or []),
                         json.dumps(message.get("web_sources") or []),
+                        json.dumps(message.get("tool_events") or []),
                         message.get("image_b64"),
                         message.get("image_mime"),
                         float(message.get("timestamp") or time.time()),
@@ -252,7 +335,7 @@ class ConversationMemoryManager:
         user_id: str,
         messages: List[Dict[str, Any]],
     ) -> None:
-        """Replace UI messages for a thread (e.g., on clear or assistant regeneration)."""
+        """Replace UI messages for a thread (e.g., on clear or regeneration)."""
         tid, uid = self._validate_ids(thread_id, user_id)
         with self._lock:
             try:
@@ -270,36 +353,72 @@ class ConversationMemoryManager:
             except Exception as exc:
                 raise MemoryPersistenceError(f"Failed updating thread messages: {exc}") from exc
 
-    def retrieve_all_threads(self, user_id: str) -> List[Dict[str, Any]]:
-        """List all threads owned by user_id, ordered by most recently updated."""
+    def retrieve_all_threads(
+        self,
+        user_id: str,
+        search_query: str = "",
+    ) -> List[Dict[str, Any]]:
+        """List threads owned by user_id, optionally filtered by title or message content."""
         uid = (user_id or "").strip()
         if not uid:
             raise MemoryPersistenceError("user_id is required to list threads.")
+        cleaned_search = (search_query or "").strip()
         with self._lock:
             try:
                 assert self._conn is not None
-                rows = self._conn.execute(
-                    """
-                    SELECT t.thread_id, t.title, t.chat_mode, t.created_at, t.updated_at,
-                           COUNT(m.id) AS message_count
-                    FROM threads t
-                    LEFT JOIN thread_messages m
-                      ON m.thread_id = t.thread_id AND m.user_id = t.user_id
-                    WHERE t.user_id = ?
-                    GROUP BY t.thread_id
-                    ORDER BY t.updated_at DESC
-                    """,
-                    (uid,),
-                ).fetchall()
+                if cleaned_search:
+                    like_term = f"%{cleaned_search.lower()}%"
+                    rows = self._conn.execute(
+                        """
+                        SELECT t.thread_id, t.title, t.chat_mode, t.is_pinned,
+                               t.created_at, t.updated_at,
+                               COUNT(m.id) AS message_count
+                        FROM threads t
+                        LEFT JOIN thread_messages m
+                          ON m.thread_id = t.thread_id AND m.user_id = t.user_id
+                        WHERE t.user_id = ?
+                          AND (
+                            LOWER(t.title) LIKE ?
+                            OR EXISTS (
+                                SELECT 1 FROM thread_messages sm
+                                WHERE sm.thread_id = t.thread_id
+                                  AND sm.user_id = t.user_id
+                                  AND LOWER(sm.content) LIKE ?
+                            )
+                          )
+                        GROUP BY t.thread_id
+                        ORDER BY t.is_pinned DESC, t.updated_at DESC
+                        """,
+                        (uid, like_term, like_term),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        """
+                        SELECT t.thread_id, t.title, t.chat_mode, t.is_pinned,
+                               t.created_at, t.updated_at,
+                               COUNT(m.id) AS message_count
+                        FROM threads t
+                        LEFT JOIN thread_messages m
+                          ON m.thread_id = t.thread_id AND m.user_id = t.user_id
+                        WHERE t.user_id = ?
+                        GROUP BY t.thread_id
+                        ORDER BY t.is_pinned DESC, t.updated_at DESC
+                        """,
+                        (uid,),
+                    ).fetchall()
+
+                now_ts = time.time()
                 return [
                     {
                         "id": row["thread_id"],
                         "thread_id": row["thread_id"],
                         "title": row["title"],
                         "chat_mode": row["chat_mode"],
+                        "is_pinned": bool(row["is_pinned"]),
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
                         "message_count": row["message_count"],
+                        "bucket": classify_time_bucket(row["updated_at"], now_ts=now_ts),
                         "timestamp": time.strftime(
                             "%b %d, %H:%M",
                             time.localtime(row["updated_at"]),
@@ -325,7 +444,7 @@ class ConversationMemoryManager:
                 rows = self._conn.execute(
                     """
                     SELECT role, content, sources_json, web_sources_json,
-                           image_b64, image_mime, timestamp
+                           tool_events_json, image_b64, image_mime, timestamp
                     FROM thread_messages
                     WHERE thread_id = ? AND user_id = ?
                     ORDER BY id ASC
@@ -339,6 +458,7 @@ class ConversationMemoryManager:
                             "content": row["content"],
                             "sources": json.loads(row["sources_json"] or "[]"),
                             "web_sources": json.loads(row["web_sources_json"] or "[]"),
+                            "tool_events": json.loads(row["tool_events_json"] or "[]"),
                             "image_b64": row["image_b64"],
                             "image_mime": row["image_mime"],
                             "timestamp": row["timestamp"],
@@ -346,7 +466,6 @@ class ConversationMemoryManager:
                         for row in rows
                     ]
 
-                # Fallback: inspect LangGraph SqliteSaver checkpoint if graph is provided
                 if graph is not None:
                     snapshot = graph.get_state({"configurable": {"thread_id": tid}})
                     values = getattr(snapshot, "values", {}) or {}
@@ -396,7 +515,7 @@ class ConversationMemoryManager:
                 raise MemoryPersistenceError(f"Failed deleting thread: {exc}") from exc
 
 
-# ── Module-level convenience functions (matching PART 16 API) ────────────────
+# ── Module-level convenience functions ────────────────────────────────────────
 
 def create_new_thread(
     user_id: str,
@@ -411,9 +530,10 @@ def create_new_thread(
 def retrieve_all_threads(
     user_id: str,
     memory: Optional[ConversationMemoryManager] = None,
+    search_query: str = "",
 ) -> List[Dict[str, Any]]:
     manager = memory or ConversationMemoryManager()
-    return manager.retrieve_all_threads(user_id=user_id)
+    return manager.retrieve_all_threads(user_id=user_id, search_query=search_query)
 
 
 def retrieve_chat_history(

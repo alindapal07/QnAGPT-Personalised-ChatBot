@@ -1,4 +1,4 @@
-"""LangChain and ChatGroq AI orchestration service."""
+"""LangChain and ChatGroq AI orchestration service (text & multimodal vision)."""
 
 import time
 from typing import Any, Dict, Generator, Iterable, List, Mapping, Sequence
@@ -17,7 +17,7 @@ def build_langchain_messages(
     messages: Sequence[Mapping[str, Any]],
     system_prompt: str,
 ) -> List[BaseMessage]:
-    """Convert session chat history into LangChain message objects."""
+    """Convert session chat history into LangChain message objects (including multi-image)."""
     lc_messages: List[BaseMessage] = []
     cleaned_system = system_prompt.strip()
     if cleaned_system:
@@ -26,19 +26,31 @@ def build_langchain_messages(
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content", "")
+        images_list = list(msg.get("images") or [])
         img_b64 = msg.get("image_b64")
         img_mime = msg.get("image_mime") or "image/png"
+        if img_b64 and not images_list:
+            images_list = [{"b64": img_b64, "mime": img_mime}]
 
         if role == "user":
-            if img_b64:
-                text_part = content.strip() or "Please analyze this image."
-                parts: List[Dict[str, Any]] = [
-                    {"type": "text", "text": text_part},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{img_mime};base64,{img_b64}"},
-                    },
-                ]
+            if images_list:
+                default_img_prompt = (
+                    "Please analyze this image."
+                    if len(images_list) == 1
+                    else "Please analyze the attached images."
+                )
+                text_part = content.strip() or default_img_prompt
+                parts: List[Dict[str, Any]] = [{"type": "text", "text": text_part}]
+                for img in images_list:
+                    b64_val = img.get("b64")
+                    mime_val = img.get("mime") or "image/png"
+                    if b64_val:
+                        parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_val};base64,{b64_val}"},
+                            }
+                        )
                 lc_messages.append(HumanMessage(content=parts))
             else:
                 lc_messages.append(HumanMessage(content=content))

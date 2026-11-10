@@ -1,4 +1,4 @@
-"""Session state lifecycle and recent conversation management."""
+"""Session state lifecycle and workspace state management."""
 
 import time
 from typing import Any, Dict, Mapping, MutableMapping
@@ -8,7 +8,7 @@ import streamlit as st
 
 from qna_bot.config.settings import get_settings
 
-_TITLE_MAX_LEN = 36
+_TITLE_MAX_LEN = 120
 
 
 def _resolve_state(
@@ -34,8 +34,23 @@ def initialize_session_state(
         "prompt_to_send": None,
         "uploader_nonce": 0,
         "doc_uploader_nonce": 0,
+        "composer_nonce": 0,
         "user_id": settings.default_user_id,
         "chat_mode": settings.chat_modes[0],
+        "active_page": "Chat",
+        "pending_approval": None,
+        "agent_workspace_state": {
+            "task": "",
+            "status": "Idle",
+            "planned_steps": [],
+            "tool_executions": [],
+            "final_result": "",
+        },
+        "doc_attach_action": "Index into Knowledge Base",
+        "rename_thread_id": None,
+        "delete_thread_id": None,
+        "mkt_selected_connector": None,
+        "mkt_cursor_stack": [],
     }
     for key, value in defaults.items():
         if key not in target:
@@ -84,10 +99,12 @@ def start_new_chat(state: MutableMapping[str, Any] | None = None) -> None:
     save_current_chat_to_recent(target)
     target["messages"] = []
     target["pending_image"] = None
+    target["pending_approval"] = None
     target["feedback"] = {}
     target["current_chat_id"] = f"conversation_{uuid.uuid4().hex[:12]}"
     target["confirm_clear"] = False
     target["uploader_nonce"] = int(target.get("uploader_nonce", 0)) + 1
+    target["composer_nonce"] = int(target.get("composer_nonce", 0)) + 1
 
 
 def clear_current_chat(state: MutableMapping[str, Any] | None = None) -> None:
@@ -95,9 +112,11 @@ def clear_current_chat(state: MutableMapping[str, Any] | None = None) -> None:
     target = _resolve_state(state)
     target["messages"] = []
     target["pending_image"] = None
+    target["pending_approval"] = None
     target["feedback"] = {}
     target["confirm_clear"] = False
     target["uploader_nonce"] = int(target.get("uploader_nonce", 0)) + 1
+    target["composer_nonce"] = int(target.get("composer_nonce", 0)) + 1
 
 
 def restore_chat(
@@ -109,6 +128,8 @@ def restore_chat(
     target["messages"] = list(chat.get("messages", []))
     target["current_chat_id"] = chat.get("id", f"conversation_{uuid.uuid4().hex[:12]}")
     target["pending_image"] = None
+    target["pending_approval"] = None
     target["feedback"] = {}
     target["confirm_clear"] = False
     target["uploader_nonce"] = int(target.get("uploader_nonce", 0)) + 1
+    target["composer_nonce"] = int(target.get("composer_nonce", 0)) + 1

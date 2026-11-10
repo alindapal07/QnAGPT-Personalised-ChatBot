@@ -17,7 +17,7 @@ from qna_bot.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-SUPPORTED_EXTENSIONS = ("pdf", "txt", "docx", "csv")
+SUPPORTED_EXTENSIONS = ("pdf", "txt", "docx", "csv", "md")
 
 
 def validate_document_input(
@@ -54,7 +54,7 @@ def validate_document_input(
 def _load_from_temp_file(temp_path: Path, ext: str) -> List[Document]:
     if ext == "pdf":
         return PyPDFLoader(str(temp_path)).load()
-    if ext == "txt":
+    if ext in ("txt", "md"):
         return TextLoader(str(temp_path), encoding="utf-8", autodetect_encoding=True).load()
     if ext == "docx":
         return Docx2txtLoader(str(temp_path)).load()

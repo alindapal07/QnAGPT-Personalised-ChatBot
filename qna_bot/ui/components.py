@@ -1,168 +1,187 @@
-"""Reusable Streamlit UI components (header, welcome screen, copy button, sources, image uploader)."""
+"""Reusable Light-mode Streamlit UI components (header, dynamic suggestions, copy, sources, HITL approval)."""
 
-import base64
 import html
 import json
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
+from urllib.parse import urlparse
 
 import streamlit as st
 
 from qna_bot.config.settings import AppSettings
-from qna_bot.core.exceptions import ImageValidationError
-from qna_bot.services.image_service import validate_and_encode_image
+from qna_bot.services.suggestion_service import SuggestedPrompt
+from qna_bot.ui.design_system import render_execution_timeline_html, render_html, status_pill_html
 
-DEFAULT_SUGGESTIONS = (
-    (
-        "Explain LangChain",
-        "Can you explain LangChain architecture, components, and how chains work?",
+DEFAULT_SUGGESTIONS: Sequence[SuggestedPrompt] = (
+    SuggestedPrompt(
+        label="Research AI startups with verified sources",
+        prompt="Find five AI startups in India with founders, websites, and funding details.",
+        category="Research",
+        icon=":material/search:",
     ),
-    (
-        "Help debug Python",
-        "What are best practices for debugging and error handling in Python?",
+    SuggestedPrompt(
+        label="Analyze uploaded documents",
+        prompt="Analyze my uploaded documents and summarize the key takeaways with source citations.",
+        category="Documents",
+        icon=":material/library_books:",
     ),
-    (
-        "How does Vision AI work?",
-        "How do multimodal vision models process and interpret images alongside text?",
+    SuggestedPrompt(
+        label="Inspect connected MCP tools",
+        prompt="Inspect my connected MCP tools and explain what tasks we can automate right now.",
+        category="MCP",
+        icon=":material/extension:",
     ),
-    (
-        "Write a FastAPI template",
-        "Show me an idiomatic FastAPI project template with Pydantic validation.",
+    SuggestedPrompt(
+        label="Compare backend architectures",
+        prompt="Compare FastAPI, LangGraph, and SQLite checkpointing patterns for production AI systems.",
+        category="Build",
+        icon=":material/build:",
     ),
 )
 
 
 def render_copy_button(text: str, button_id: str) -> None:
-    """Render a lightweight JS-powered copy button that shows 'Copied' for 1.8s."""
+    """Render a Light-theme JS-powered copy button that displays 'Copied' for 1.8s."""
     safe_json = json.dumps(text).replace("</", "<\\/")
-    html_code = f"""
-    <style>html, body {{ margin: 0; padding: 0; overflow: hidden; background: transparent; }}</style>
-    <div style="margin: 0; padding: 0;">
-      <button id="btn_{button_id}" onclick="copyText_{button_id}()" style="
-        background: transparent;
-        border: 1px solid #d1d5db;
-        border-radius: 5px;
-        color: #4b5563;
-        font-family: inherit;
-        font-size: 11.5px;
-        padding: 2px 8px;
-        cursor: pointer;
-        line-height: 1.4;
-        transition: background-color 0.15s, color 0.15s, border-color 0.15s;
-      ">Copy</button>
-      <script>
-        (function() {{
-          const btn = document.getElementById("btn_{button_id}");
-          function applyThemeStyle() {{
-            let isDark = false;
-            try {{
-              if (window.parent && window.parent.document) {{
-                const doc = window.parent.document;
-                const dt = doc.documentElement.getAttribute('data-theme') || (doc.body && doc.body.getAttribute('data-theme'));
-                if (dt === 'dark') {{ isDark = true; }}
-                else if (dt === 'light') {{ isDark = false; }}
-                else {{
-                  const app = doc.querySelector('.stApp') || doc.body;
-                  const bg = window.parent.getComputedStyle(app).backgroundColor;
-                  const m = bg.match(/\\d+/g);
-                  if (m && m.length >= 3) {{
-                    const lum = 0.299 * parseInt(m[0], 10) + 0.587 * parseInt(m[1], 10) + 0.114 * parseInt(m[2], 10);
-                    isDark = lum < 128;
-                  }}
-                }}
-              }}
-            }} catch(e) {{
-              isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-            }}
-
-            if (isDark) {{
-              btn.style.borderColor = "#303642";
-              btn.style.color = "#CBD5E1";
-            }} else {{
-              btn.style.borderColor = "#E5E7EB";
-              btn.style.color = "#4B5563";
-            }}
-          }}
-          applyThemeStyle();
-          setTimeout(applyThemeStyle, 100);
-        }})();
-
-        function copyText_{button_id}() {{
-          const val = {safe_json};
-          const btn = document.getElementById("btn_{button_id}");
-          if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(val).then(() => {{
-              btn.innerText = "Copied";
-              setTimeout(() => {{ btn.innerText = "Copy"; }}, 1800);
-            }}).catch(() => fallback_{button_id}(val, btn));
-          }} else {{
-            fallback_{button_id}(val, btn);
-          }}
-        }}
-        function fallback_{button_id}(val, btn) {{
-          const ta = document.createElement("textarea");
-          ta.value = val;
-          ta.style.position = "fixed";
-          ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          btn.innerText = "Copied";
-          setTimeout(() => {{ btn.innerText = "Copy"; }}, 1800);
-        }}
-      </script>
-    </div>
-    """
+    html_code = (
+        '<style>html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }</style>'
+        '<div style="margin: 0; padding: 0;">'
+        f'<button id="btn_{button_id}" onclick="copyText_{button_id}()" style="'
+        'background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px; color: #172033; '
+        'font-family: Inter, system-ui, sans-serif; font-size: 12px; font-weight: 500; '
+        'padding: 3px 10px; cursor: pointer; line-height: 1.45;">Copy</button>'
+        "<script>"
+        f"function copyText_{button_id}() {{"
+        f"const val = {safe_json};"
+        f'const btn = document.getElementById("btn_{button_id}");'
+        "if (navigator.clipboard && navigator.clipboard.writeText) {"
+        "navigator.clipboard.writeText(val).then(() => {"
+        'btn.innerText = "Copied"; btn.style.borderColor = "#315EAB"; btn.style.color = "#315EAB";'
+        f'setTimeout(() => {{ btn.innerText = "Copy"; btn.style.borderColor = "#E2E8F0"; btn.style.color = "#172033"; }}, 1800);'
+        f"}}).catch(() => fallback_{button_id}(val, btn));"
+        f"}} else {{ fallback_{button_id}(val, btn); }}"
+        "}"
+        f"function fallback_{button_id}(val, btn) {{"
+        'const ta = document.createElement("textarea"); ta.value = val; ta.style.position = "fixed"; ta.style.opacity = "0";'
+        'document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);'
+        'btn.innerText = "Copied"; setTimeout(() => { btn.innerText = "Copy"; }, 1800);'
+        "}"
+        "</script></div>"
+    )
     if hasattr(st, "iframe"):
-        st.iframe(html_code, height=28, alt="Copy assistant response")
+        st.iframe(html_code, height=30, alt="Copy assistant response")
     else:
         import streamlit.components.v1 as components
 
-        components.html(html_code, height=28)
+        components.html(html_code, height=30)
 
 
-def render_header(model_name: str, chat_mode: Optional[str] = None) -> None:
-    """Render subtle enterprise top header with active model and chat mode."""
+def render_header(
+    model_name: str,
+    chat_mode: Optional[str] = None,
+    page_title: str = "Chat",
+    conversation_title: Optional[str] = None,
+    settings: Optional[AppSettings] = None,
+    on_clear_chat: Optional[Callable[[], None]] = None,
+) -> None:
+    """Render compact Chat header with active conversation title, model, mode, and contextual popover."""
     escaped_model = html.escape(model_name)
+    escaped_page = html.escape(page_title)
+    sub_html = (
+        f'<span class="app-header-sub" title="{html.escape(conversation_title)}">/ {html.escape(conversation_title)}</span>'
+        if conversation_title and page_title == "Chat"
+        else ""
+    )
     mode_html = (
-        f"Mode:&nbsp;<code>{html.escape(chat_mode)}</code>&nbsp;&nbsp;"
+        f'<span class="app-header-pill">{html.escape(chat_mode)}</span>'
         if chat_mode
         else ""
     )
-    st.markdown(
-        f"""
-        <div class="app-header">
-            <span class="app-header-title">QnAGPT Assistant</span>
-            <span class="app-header-meta">
-                {mode_html}
-                Model:&nbsp;<code>{escaped_model}</code>&nbsp;&nbsp;
-                Powered by Groq &amp; LangGraph
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
+
+    show_actions = page_title == "Chat" and settings is not None and callable(getattr(st, "popover", None))
+    if show_actions:
+        col_head, col_cfg = st.columns([5.3, 1.3])
+    else:
+        col_head = st.container()
+        col_cfg = None
+
+    with col_head:
+        render_html(
+            f'<div class="app-header">'
+            f'<div class="app-header-left"><span class="app-header-title">QnAGPT &middot; {escaped_page}</span>{sub_html}</div>'
+            f'<div class="app-header-meta">{mode_html}<span class="app-header-pill">{escaped_model}</span></div>'
+            f"</div>"
+        )
+
+    if col_cfg is not None and settings is not None:
+        with col_cfg:
+            with st.popover("Configure", icon=":material/settings:", use_container_width=True):
+                mode_opts = [*settings.chat_modes, "Agent Workspace"]
+                cur_mode = st.session_state.get("chat_mode", mode_opts[0])
+                m_idx = mode_opts.index(cur_mode) if cur_mode in mode_opts else 0
+                st.session_state["chat_mode"] = st.selectbox(
+                    "Agent Mode",
+                    options=mode_opts,
+                    index=m_idx,
+                    key="hdr_mode_select",
+                )
+                cur_model = str(st.session_state.get("cfg_text_model") or settings.default_text_model)
+                mod_opts = list(settings.available_text_models)
+                mod_idx = mod_opts.index(cur_model) if cur_model in mod_opts else 0
+                st.session_state["cfg_text_model"] = st.selectbox(
+                    "Model",
+                    options=mod_opts,
+                    index=mod_idx,
+                    key="hdr_model_select",
+                )
+                if on_clear_chat is not None and st.session_state.get("messages"):
+                    st.divider()
+                    if st.button(
+                        "Clear Conversation",
+                        icon=":material/delete:",
+                        key="hdr_clear_chat",
+                        use_container_width=True,
+                    ):
+                        on_clear_chat()
+
+
+def render_welcome_screen(
+    suggestions: Optional[Sequence[SuggestedPrompt]] = None,
+    on_refresh: Optional[Callable[[], None]] = None,
+) -> None:
+    """Render clean SaaS Chat landing view with dynamic workspace-aware starter prompts."""
+    render_html(
+        '<div class="welcome-wrap">'
+        '<div class="welcome-title">How can I help you research or build today?</div>'
+        '<div class="welcome-sub">Ask questions across your Knowledge Base documents, live web sources, and connected MCP integrations.</div>'
+        "</div>"
     )
 
+    active_suggestions = list(suggestions or DEFAULT_SUGGESTIONS)
+    head_col, ref_col = st.columns([5, 1])
+    with head_col:
+        render_html('<div class="sug-header-label">Suggested for this workspace</div>')
+    with ref_col:
+        if on_refresh is not None and st.button(
+            "Refresh",
+            key="sug_refresh_btn",
+            type="tertiary",
+            icon=":material/refresh:",
+            help="Refresh contextual prompt suggestions",
+            use_container_width=True,
+        ):
+            on_refresh()
 
-def render_welcome_screen() -> None:
-    """Render welcome screen with starter prompt suggestions."""
-    st.markdown(
-        """
-        <div class="welcome-wrap">
-            <div class="welcome-title">QnAGPT Assistant</div>
-            <div class="welcome-sub">
-                Ask general questions, chat with uploaded documents (PDF, TXT, DOCX, CSV), search the web, or attach an image.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    col_left, col_right = st.columns(2)
-    for idx, (label, prompt) in enumerate(DEFAULT_SUGGESTIONS):
-        col = col_left if idx % 2 == 0 else col_right
-        with col:
-            if st.button(label, key=f"sug_{idx}", use_container_width=True):
+    cols = st.columns(2)
+    for idx, item in enumerate(active_suggestions):
+        if isinstance(item, tuple):
+            label, prompt = item[0], item[1]
+            icon = item[2] if len(item) > 2 else ":material/search:"
+        else:
+            label = item.label
+            prompt = item.prompt
+            icon = item.icon
+        with cols[idx % 2]:
+            if st.button(label, key=f"sug_{idx}", icon=icon, help=prompt, use_container_width=True):
                 st.session_state.prompt_to_send = prompt
                 st.rerun()
 
@@ -170,101 +189,125 @@ def render_welcome_screen() -> None:
 def render_sources_panel(
     sources: Optional[Sequence[Dict[str, Any]]] = None,
     web_sources: Optional[Sequence[Dict[str, Any]]] = None,
+    tool_events: Optional[Sequence[Dict[str, Any]]] = None,
+    execution_trace: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> None:
-    """Render deduplicated document citations separately from external web sources."""
+    """Render compact document citations, web sources with publisher links, and tool execution trace."""
     doc_list = list(sources or [])
     web_list = list(web_sources or [])
-    if not doc_list and not web_list:
+    tool_list = list(tool_events or [])
+    trace_list = list(execution_trace or [])
+    if not doc_list and not web_list and not tool_list and not trace_list:
         return
 
-    total = len(doc_list) + len(web_list)
-    with st.expander(f"Sources ({total})", expanded=False):
-        if doc_list:
-            st.markdown("**Document Sources**")
-            for idx, src in enumerate(doc_list, start=1):
-                filename = html.escape(str(src.get("source", "Document")))
-                page = src.get("page")
-                page_text = f" &bull; Page {int(page)}" if page is not None else ""
-                excerpt = html.escape(str(src.get("excerpt", "")))
-                excerpt_html = (
-                    f'<div class="source-card-snippet">{excerpt}</div>'
-                    if excerpt
-                    else ""
-                )
-                st.markdown(
-                    f"""
-                    <div class="source-card">
-                        <div class="source-card-meta">{idx}. {filename}{page_text}</div>
-                        {excerpt_html}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+    if doc_list or web_list:
+        total = len(doc_list) + len(web_list)
+        with st.expander(f"Sources ({total})", expanded=False):
+            if doc_list:
+                st.markdown("**Knowledge Base References**")
+                for idx, src in enumerate(doc_list, start=1):
+                    filename = html.escape(str(src.get("source", "Document")))
+                    page = src.get("page")
+                    page_text = f" &middot; Page {int(page)}" if page is not None else ""
+                    excerpt = html.escape(str(src.get("excerpt", "")))
+                    excerpt_html = f'<div class="source-card-snippet">{excerpt}</div>' if excerpt else ""
+                    render_html(
+                        f'<div class="source-card">'
+                        f'<div class="source-card-meta"><span>{idx}. {filename}{page_text}</span>{status_pill_html("Indexed Doc", "accent")}</div>'
+                        f"{excerpt_html}</div>"
+                    )
 
-        if web_list:
-            st.markdown("**Web Sources**")
-            for idx, web in enumerate(web_list, start=1):
-                title = html.escape(str(web.get("title", "Web Result")))
-                url = str(web.get("url", "")).strip()
-                snippet = html.escape(str(web.get("snippet", "")))
-                link_html = (
-                    f'<a href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">{title}</a>'
-                    if url.startswith(("http://", "https://"))
-                    else title
-                )
-                snippet_html = (
-                    f'<div class="source-card-snippet">{snippet}</div>'
-                    if snippet
-                    else ""
-                )
-                st.markdown(
-                    f"""
-                    <div class="source-card">
-                        <div class="source-card-meta">{idx}. {link_html}</div>
-                        {snippet_html}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            if web_list:
+                st.markdown("**Web Sources**")
+                for idx, web in enumerate(web_list, start=1):
+                    title = html.escape(str(web.get("title", "Web Result")))
+                    url = str(web.get("url", "")).strip()
+                    host = (urlparse(url).netloc or "").replace("www.", "") if url else ""
+                    snippet = html.escape(str(web.get("snippet", "")))
+                    link_html = (
+                        f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{title}</a>'
+                        if url.startswith(("http://", "https://"))
+                        else title
+                    )
+                    status_val = str(web.get("status", "")).strip()
+                    if status_val == "read":
+                        badge_html = status_pill_html("Page read", "ok")
+                    elif status_val == "inaccessible":
+                        badge_html = status_pill_html("Inaccessible", "warn")
+                    elif status_val == "snippet_only":
+                        badge_html = status_pill_html("Snippet", "neutral")
+                    else:
+                        badge_html = ""
+                    domain_html = (
+                        f'<span class="source-card-domain">{html.escape(host)}</span>' if host else ""
+                    )
+                    snippet_html = f'<div class="source-card-snippet">{snippet}</div>' if snippet else ""
+                    render_html(
+                        f'<div class="source-card">'
+                        f'<div class="source-card-meta"><span>{idx}. {link_html} {domain_html}</span>{badge_html}</div>'
+                        f"{snippet_html}</div>"
+                    )
+
+    if tool_list or trace_list:
+        step_count = len(trace_list) if trace_list else len(tool_list)
+        with st.expander(f"Execution & Tool Activity ({step_count})", expanded=False):
+            if trace_list:
+                render_html(render_execution_timeline_html(trace_list, header="Execution stages"))
+            if tool_list:
+                st.markdown("**Tool Calls**")
+                for idx, ev in enumerate(tool_list, start=1):
+                    srv = html.escape(str(ev.get("server_name", "Tool")))
+                    tname = html.escape(str(ev.get("tool_name", "")))
+                    ev_status = str(ev.get("status", "completed")).lower()
+                    tone = "ok" if ev_status == "completed" else ("err" if ev_status in ("failed", "blocked", "rejected") else "warn")
+                    dur = ev.get("duration_ms")
+                    dur_txt = f" &middot; {dur:.0f} ms" if isinstance(dur, (int, float)) else ""
+                    summary = html.escape(str(ev.get("summary", ""))[:260])
+                    render_html(
+                        f'<div class="source-card">'
+                        f'<div class="source-card-meta"><span>{idx}. {srv} / <code>{tname}</code>{dur_txt}</span>{status_pill_html(ev_status.title(), tone)}</div>'
+                        f'<div class="source-card-snippet">{summary}</div>'
+                        f"</div>"
+                    )
 
 
-def render_image_upload_section(settings: AppSettings) -> None:
-    """Render compact, theme-synchronized image attachment section."""
-    has_image = bool(st.session_state.pending_image)
-    nonce = st.session_state.get("uploader_nonce", 0)
+def render_approval_card(
+    pending_approval: Dict[str, Any],
+    on_decision: Callable[[str, bool], None],
+    key_prefix: str = "chat_appr",
+) -> None:
+    """Render an interactive Human-in-the-Loop approval prompt with masked arguments."""
+    approval_id = str(pending_approval.get("approval_id", ""))
+    server_name = html.escape(str(pending_approval.get("server_name", "MCP Server")))
+    tool_name = html.escape(str(pending_approval.get("tool_name", "tool")))
+    category = html.escape(str(pending_approval.get("category", "MODIFICATION")))
+    reason = html.escape(str(pending_approval.get("reason", "Requires authorization.")))
+    masked_args = str(pending_approval.get("masked_arguments", "{}"))
 
-    with st.expander("Attach image", expanded=has_image):
-        uploaded_file = st.file_uploader(
-            "Upload an image",
-            type=list(settings.allowed_image_types),
-            key=f"img_file_uploader_{nonce}",
-            label_visibility="collapsed",
-        )
-        if uploaded_file is not None:
-            try:
-                st.session_state.pending_image = validate_and_encode_image(
-                    file_bytes=uploaded_file.getvalue(),
-                    filename=uploaded_file.name,
-                    max_size_mb=settings.max_image_size_mb,
-                    allowed_types=settings.allowed_image_types,
-                )
-            except ImageValidationError as exc:
-                st.error(str(exc))
+    render_html(
+        f'<div class="approval-card">'
+        f'<div class="approval-title">ACTION REQUIRES APPROVAL ({category})</div>'
+        f'<div class="approval-meta"><strong>Server:</strong> {server_name} &nbsp;|&nbsp; <strong>Tool:</strong> <code>{tool_name}</code><br/>{reason}</div>'
+        f"</div>"
+    )
+    with st.expander("Arguments Preview", expanded=True):
+        st.code(masked_args, language="json")
 
-        if st.session_state.pending_image:
-            img = st.session_state.pending_image
-            safe_name = html.escape(img["name"])
-            st.markdown(
-                f'<div class="img-preview-bar">'
-                f'<span>Attached: <strong>{safe_name}</strong> ({img["width"]}x{img["height"]})</span>'
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            col_preview, col_remove = st.columns([3, 1])
-            with col_preview:
-                st.image(base64.b64decode(img["b64"]), width=180)
-            with col_remove:
-                if st.button("Remove", key="btn_remove_pending_img"):
-                    st.session_state.pending_image = None
-                    st.session_state.uploader_nonce = nonce + 1
-                    st.rerun()
+    col_approve, col_reject, _ = st.columns([1, 1, 3])
+    with col_approve:
+        if st.button(
+            "Approve",
+            type="primary",
+            icon=":material/check_circle:",
+            key=f"{key_prefix}_approve_{approval_id}",
+            use_container_width=True,
+        ):
+            on_decision(approval_id, True)
+    with col_reject:
+        if st.button(
+            "Reject",
+            icon=":material/error:",
+            key=f"{key_prefix}_reject_{approval_id}",
+            use_container_width=True,
+        ):
+            on_decision(approval_id, False)

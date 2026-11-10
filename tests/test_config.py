@@ -1,6 +1,8 @@
 """Tests for application configuration and environment settings."""
 
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -34,6 +36,18 @@ class TestConfigSettings(unittest.TestCase):
         second = get_settings()
         self.assertIs(first, second)
         get_settings.cache_clear()
+
+    def test_dotenv_loads_glama_key_even_when_groq_key_is_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("GLAMA_API_KEY=glama_unit_test_val\n", encoding="utf-8")
+            with (
+                patch("qna_bot.config.settings._candidate_env_paths", return_value=(env_file,)),
+                patch.dict(os.environ, {"GROQ_API_KEY": "gsk_preset", "GLAMA_API_KEY": ""}, clear=False),
+            ):
+                loaded = load_settings()
+                self.assertEqual(loaded.groq_api_key, "gsk_preset")
+                self.assertEqual(loaded.glama_api_key, "glama_unit_test_val")
 
 
 if __name__ == "__main__":

@@ -4,23 +4,32 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from qna_bot.agent.graph import build_agent_graph
 from qna_bot.agent.memory import ConversationMemoryManager
-from qna_bot.agent.nodes import AgentNodeSuite, _QueryAnalysisSchema, _ValidationSchema
+from qna_bot.agent.nodes import (
+    AgentNodeSuite,
+    _QueryAnalysisSchema,
+    _TaskPlanSchema,
+    _ValidationSchema,
+)
 from qna_bot.agent.routing import (
     route_after_analysis,
     route_after_grading,
     route_after_validation,
 )
 from qna_bot.config.settings import AppSettings
+from qna_bot.database.connection import DatabaseManager
+from qna_bot.mcp.client_manager import MCPClientManager
+from qna_bot.mcp.models import ToolExecutionResult
 from qna_bot.rag.grader import DocumentGrader, _BatchGradeSchema
 from qna_bot.rag.ingestion import DocumentIngestor
 from qna_bot.rag.retriever import DocumentRetriever
 from qna_bot.rag.vector_store import FAISSVectorStoreManager
 from qna_bot.services.chat_service import ChatService
-from qna_bot.tools.web_search import DuckDuckGoWebSearcher, WebSearchResult
+from qna_bot.tools.web_research import ResearchEntityRecord, ResearchExtractionSchema
+from qna_bot.tools.web_search import DuckDuckGoWebSearcher, ExtractedWebPage, SafeWebPageReader, WebSearchResult, build_open_web_page_tool
 from tests.test_rag import DeterministicTestEmbeddings, _make_pdf_bytes
 
 
@@ -305,10 +314,457 @@ def test_end_to_end_agentic_rag_and_web_search_workflow(tmp_path: Path) -> None:
             )
             assert "predictive models" in res3.answer
 
-        # Verify SQLite checkpoint actually contains all 3 turns
+        # Verify SQLite checkpoint preserves 3-turn history under Alice's scoped namespace only
         graph = build_agent_graph(user_id="alice", memory_manager=memory, settings=settings)
-        snapshot = graph.get_state({"configurable": {"thread_id": thread_id}})
+        alice_tid = chat_service._scoped_checkpoint_id("alice", thread_id)
+        bob_tid = chat_service._scoped_checkpoint_id("bob", thread_id)
+        snapshot = graph.get_state({"configurable": {"thread_id": alice_tid}})
         checkpoint_msgs = snapshot.values["messages"]
         assert len(checkpoint_msgs) == 6
+        bob_snapshot = graph.get_state({"configurable": {"thread_id": bob_tid}})
+        assert bob_snapshot.values.get("messages", []) == []
     finally:
         memory.close()
+
+
+def test_agent_vs_response_llm_and_harmony_browser_open_recovery(tmp_path: Path) -> None:
+    settings = AppSettings(
+        groq_api_key="gsk_test",
+        data_dir=tmp_path,
+        vector_store_dir=tmp_path / "vs",
+        sqlite_db_path=tmp_path / "chatbot.db",
+    )
+    store = FAISSVectorStoreManager(
+        base_dir=settings.vector_store_dir,
+        embeddings=DeterministicTestEmbeddings(),
+    )
+    memory = ConversationMemoryManager(db_path=settings.sqlite_db_path)
+
+    mock_searcher = MagicMock(spec=DuckDuckGoWebSearcher)
+    hit = WebSearchResult(
+        title="Python 3.13 Features",
+        url="https://docs.python.org/3.13/whatsnew/3.13.html",
+        snippet="Free-threaded CPython support.",
+    )
+    mock_searcher.search.return_value = ([hit], "")
+    mock_searcher.get_result_by_id.return_value = hit
+
+    fake_llm = MagicMock()
+    analysis_mock = MagicMock()
+    analysis_mock.invoke.return_value = _QueryAnalysisSchema(query_type="GENERAL")
+    fake_llm.with_structured_output.return_value = analysis_mock
+
+    bound_tool_llm = MagicMock()
+    # Turn 1: web_search, Turn 2: model emits Harmony browser.open -> remapped to open_web_page!
+    # Turn 3: model chooses to respond in text -> Response LLM synthesizes
+    bound_tool_llm.invoke.side_effect = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "web_search",
+                    "args": {"query": "Python 3.13 features"},
+                    "id": "call_ws_1",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "browser.open",
+                    "args": {"id": 1, "cursor": 0},
+                    "id": "call_open_1",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        AIMessage(content=""),
+    ]
+    fake_llm.bind_tools.return_value = bound_tool_llm
+
+    # Test A: Normal Chat never binds tools
+    fake_llm.invoke.return_value = AIMessage(content="Dependency injection decouples components.")
+    try:
+        graph = build_agent_graph(
+            user_id="alice",
+            api_key="gsk_test",
+            retriever=DocumentRetriever(vector_store=store, settings=settings),
+            grader=DocumentGrader(api_key="gsk_test", settings=settings),
+            web_searcher=mock_searcher,
+            memory_manager=memory,
+            settings=settings,
+        )
+        with patch("qna_bot.agent.nodes.ChatGroq", return_value=fake_llm):
+            out_a = graph.invoke(
+                {
+                    "messages": [HumanMessage(content="Explain dependency injection simply")],
+                    "user_query": "Explain dependency injection simply",
+                    "chat_mode": "General Chat",
+                    "user_id": "alice",
+                    "thread_id": "t_normal",
+                },
+                config={"configurable": {"thread_id": "t_normal"}},
+            )
+            assert "decouples" in out_a["answer"]
+            fake_llm.bind_tools.assert_not_called()
+
+            # Test B/C + Response LLM recovery from Groq tool_use_failed
+            fake_llm.invoke.side_effect = [
+                Exception(
+                    "Error code: 400 - {'error': {'message': 'Tool choice is none, but model called a tool', 'code': 'tool_use_failed'}}"
+                ),
+                AIMessage(content="Python 3.13 adds experimental free-threaded mode and JIT highlights."),
+            ]
+            with patch(
+                "qna_bot.tools.web_search.SafeWebPageReader.fetch_text",
+                return_value="Title: What's New In Python 3.13\nExperimental free-threaded mode.",
+            ) as mock_fetch:
+                out_bc = graph.invoke(
+                    {
+                        "messages": [HumanMessage(content="Search Python 3.13 features and open result 1")],
+                        "user_query": "Search Python 3.13 features and open result 1",
+                        "chat_mode": "Auto (Agentic)",
+                        "user_id": "alice",
+                        "thread_id": "t_browse",
+                    },
+                    config={"configurable": {"thread_id": "t_browse"}},
+                )
+
+        assert mock_fetch.called
+        assert out_bc["tool_calls_count"] == 2
+        assert "free-threaded" in out_bc["answer"].lower()
+        assert fake_llm.bind_tools.call_args.kwargs.get("tool_choice") == "auto"
+
+        # Verify Response LLM was never handed raw ToolMessage or AIMessage(tool_calls=...)
+        for call in fake_llm.invoke.call_args_list:
+            passed_msgs = call.args[0]
+            assert not any(isinstance(m, ToolMessage) for m in passed_msgs)
+            assert not any(isinstance(m, AIMessage) and getattr(m, "tool_calls", None) for m in passed_msgs)
+    finally:
+        memory.close()
+
+
+def test_multi_mcp_server_binding_cap_and_zero_server_agent_fallback(tmp_path: Path) -> None:
+    db_path = tmp_path / "multi_mcp.db"
+    settings = AppSettings(
+        groq_api_key="gsk_test",
+        data_dir=tmp_path,
+        vector_store_dir=tmp_path / "vs",
+        sqlite_db_path=db_path,
+    )
+    db = DatabaseManager(db_path=db_path)
+    memory = ConversationMemoryManager(db_path=db_path)
+    mcp_mgr = MCPClientManager(db_manager=db)
+    store = FAISSVectorStoreManager(
+        base_dir=settings.vector_store_dir,
+        embeddings=DeterministicTestEmbeddings(),
+    )
+
+    # Test D & E: NeuralVerge (380 tools) + GitHub (2 tools) with zero name collisions
+    nv_tools = [
+        SimpleNamespace(
+            name=f"run_actor_{idx}" if idx else "run_theresanaiforthat_companies",
+            description=f"Run dataset actor {idx}",
+            input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            annotations=SimpleNamespace(readOnlyHint=True, destructiveHint=False),
+        )
+        for idx in range(380)
+    ]
+    gh_tools = [
+        SimpleNamespace(
+            name="search_repositories",
+            description="Search GitHub repositories",
+            input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            annotations=SimpleNamespace(readOnlyHint=True, destructiveHint=False),
+        )
+    ]
+    mcp_mgr.tool_registry.register_server_tools("alice", "srv_nv", "NeuralVerge", nv_tools)
+    mcp_mgr.tool_registry.register_server_tools("alice", "srv_gh", "GitHub", gh_tools)
+
+    fake_llm = MagicMock()
+    def _structured(cls):
+        m = MagicMock()
+        if cls.__name__ == "_QueryAnalysisSchema":
+            m.invoke.return_value = _QueryAnalysisSchema(query_type="AGENT_TASK", web_search_required=True)
+        elif cls.__name__ == "_TaskPlanSchema":
+            m.invoke.return_value = _TaskPlanSchema(steps=["Query companies", "Summarize output"])
+        return m
+
+    fake_llm.with_structured_output.side_effect = _structured
+    bound_llm = MagicMock()
+    bound_llm.invoke.side_effect = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "neuralverge__run_theresanaiforthat_companies",
+                    "args": {"query": "AI startups"},
+                    "id": "call_nv_1",
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        AIMessage(content=""),
+    ]
+    fake_llm.bind_tools.return_value = bound_llm
+    fake_llm.invoke.return_value = AIMessage(content="Completed NeuralVerge dataset query cleanly.")
+
+    try:
+        graph = build_agent_graph(
+            user_id="alice",
+            api_key="gsk_test",
+            retriever=DocumentRetriever(vector_store=store, settings=settings),
+            grader=DocumentGrader(api_key="gsk_test", settings=settings),
+            memory_manager=memory,
+            mcp_manager=mcp_mgr,
+            settings=settings,
+        )
+        with (
+            patch("qna_bot.agent.nodes.ChatGroq", return_value=fake_llm),
+            patch.object(
+                mcp_mgr,
+                "execute_tool",
+                return_value=ToolExecutionResult(
+                    server_id="srv_nv",
+                    server_name="NeuralVerge",
+                    tool_name="run_theresanaiforthat_companies",
+                    success=True,
+                    content='[{"company": "ExampleAI"}]',
+                    duration_ms=42.0,
+                ),
+            ),
+        ):
+            out = graph.invoke(
+                {
+                    "messages": [HumanMessage(content="Get AI companies from NeuralVerge")],
+                    "user_query": "Get AI companies from NeuralVerge",
+                    "chat_mode": "Auto (Agentic)",
+                    "user_id": "alice",
+                    "thread_id": "t_nv",
+                },
+                config={"configurable": {"thread_id": "t_nv"}},
+            )
+        assert "ExampleAI" in str(out["tool_executions"]) or "Completed NeuralVerge" in out["answer"]
+        bound_list = fake_llm.bind_tools.call_args.args[0]
+        # 35 MCP cap + 4 built-ins (retrieve, summarize, web_search, open_web_page)
+        assert len(bound_list) <= 39
+        assert "open_web_page" in {t.name for t in bound_list}
+        assert fake_llm.bind_tools.call_args.kwargs.get("tool_choice") == "auto"
+
+        # Test F: No Connected MCP Servers still executes built-in search+open in AGENT_TASK
+        empty_db = DatabaseManager(db_path=tmp_path / "empty_mcp.db")
+        empty_mcp = MCPClientManager(db_manager=empty_db)
+        mock_searcher = MagicMock(spec=DuckDuckGoWebSearcher)
+        hit = WebSearchResult(title="Doc", url="https://example.com/doc", snippet="Summary snippet")
+        mock_searcher.search.return_value = ([hit], "")
+        mock_searcher.get_result_by_id.return_value = hit
+
+        bound_llm.invoke.side_effect = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "web_search", "args": {"query": "Doc"}, "id": "c1", "type": "tool_call"}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "open_web_page", "args": {"result_id": 1}, "id": "c2", "type": "tool_call"}],
+            ),
+            AIMessage(content=""),
+        ]
+        fake_llm.invoke.return_value = AIMessage(content="Read https://example.com/doc via built-in browser.")
+        empty_graph = build_agent_graph(
+            user_id="bob",
+            api_key="gsk_test",
+            retriever=DocumentRetriever(vector_store=store, settings=settings),
+            grader=DocumentGrader(api_key="gsk_test", settings=settings),
+            web_searcher=mock_searcher,
+            memory_manager=memory,
+            mcp_manager=empty_mcp,
+            settings=settings,
+        )
+        with (
+            patch("qna_bot.agent.nodes.ChatGroq", return_value=fake_llm),
+            patch("qna_bot.tools.web_search.SafeWebPageReader.fetch_text", return_value="Full document text"),
+        ):
+            out_f = empty_graph.invoke(
+                {
+                    "messages": [HumanMessage(content="Search for Doc and open the first result")],
+                    "user_query": "Search for Doc and open the first result",
+                    "chat_mode": "Auto (Agentic)",
+                    "user_id": "bob",
+                    "thread_id": "t_empty_mcp",
+                },
+                config={"configurable": {"thread_id": "t_empty_mcp"}},
+            )
+        assert "example.com/doc" in out_f["answer"]
+        assert len(out_f["tool_executions"]) == 2
+        empty_db.close()
+    finally:
+        memory.close()
+        db.close()
+
+
+def test_deep_web_research_pipeline_opens_pages_extracts_verifies_and_handles_failed_pages(
+    tmp_path: Path,
+) -> None:
+    settings = AppSettings(
+        groq_api_key="gsk_test",
+        data_dir=tmp_path,
+        vector_store_dir=tmp_path / "vs",
+        sqlite_db_path=tmp_path / "research.db",
+    )
+    store = FAISSVectorStoreManager(
+        base_dir=settings.vector_store_dir,
+        embeddings=DeterministicTestEmbeddings(),
+    )
+    memory = ConversationMemoryManager(db_path=settings.sqlite_db_path)
+
+    mock_searcher = MagicMock(spec=DuckDuckGoWebSearcher)
+    mock_searcher.search.return_value = (
+        [
+            WebSearchResult(
+                title="UpForge Blocked Post",
+                url="https://upforge.example.com/startups",
+                snippet="Blog post link only.",
+            ),
+            WebSearchResult(
+                title="Seedtable India AI",
+                url="https://seedtable.example.org/ai-india",
+                snippet="List of top Indian AI startups.",
+            ),
+            WebSearchResult(
+                title="Funding Tracker India",
+                url="https://tracker.example.net/india-ai",
+                snippet="Startup tracker.",
+            ),
+        ],
+        "",
+    )
+
+    def _fake_extract_page(url: str) -> ExtractedWebPage:
+        if "upforge" in url:
+            return ExtractedWebPage(
+                requested_url=url,
+                final_url=url,
+                canonical_url=url,
+                title="",
+                description="",
+                content="",
+                status_code=403,
+                success=False,
+                error="HTTP 403 while accessing webpage.",
+            )
+        if "seedtable" in url:
+            return ExtractedWebPage(
+                requested_url=url,
+                final_url=url,
+                canonical_url=url,
+                title="Seedtable AI India",
+                description="",
+                content=(
+                    "| Company | Founders | Website | Funding |\n"
+                    "| --- | --- | --- | --- |\n"
+                    "| Sarvam AI | Vivek Raghavan, Pratyush Kumar | https://sarvam.ai | $41M |"
+                ),
+                status_code=200,
+                success=True,
+                char_count=140,
+            )
+        return ExtractedWebPage(
+            requested_url=url,
+            final_url=url,
+            canonical_url=url,
+            title="Funding Tracker India",
+            description="",
+            content="Sarvam AI (Vivek Raghavan) raised $41M. Krutrim (Bhavish Aggarwal) website https://olakrutrim.com raised $50M.",
+            status_code=200,
+            success=True,
+            char_count=110,
+        )
+
+    fake_llm = MagicMock()
+
+    def _structured(schema_cls):
+        m = MagicMock()
+        if schema_cls.__name__ == "_QueryAnalysisSchema":
+            m.invoke.return_value = _QueryAnalysisSchema(
+                query_type="WEB_SEARCH",
+                web_search_required=True,
+            )
+        elif schema_cls.__name__ == "ResearchExtractionSchema":
+            m.invoke.return_value = ResearchExtractionSchema(
+                companies=[
+                    ResearchEntityRecord(
+                        name="Sarvam AI",
+                        founders=["Vivek Raghavan", "Pratyush Kumar"],
+                        website="https://sarvam.ai",
+                        funding_amount="$41M",
+                        source_urls=[
+                            "https://seedtable.example.org/ai-india",
+                            "https://tracker.example.net/india-ai",
+                        ],
+                    ),
+                    ResearchEntityRecord(
+                        name="Krutrim",
+                        founders=["Bhavish Aggarwal"],
+                        website="https://olakrutrim.com",
+                        funding_amount="$50M",
+                        source_urls=["https://tracker.example.net/india-ai"],
+                    ),
+                ]
+            )
+        return m
+
+    fake_llm.with_structured_output.side_effect = _structured
+    fake_llm.invoke.return_value = AIMessage(
+        content=(
+            "| Company | Founders | Website | Funding |\n"
+            "| --- | --- | --- | --- |\n"
+            "| Sarvam AI | Vivek Raghavan, Pratyush Kumar | https://sarvam.ai | $41M |\n"
+            "| Krutrim | Bhavish Aggarwal | https://olakrutrim.com | $50M |"
+        )
+    )
+
+    try:
+        chat_svc = ChatService(
+            settings=settings,
+            memory_manager=memory,
+            vector_store=store,
+            web_searcher=mock_searcher,
+        )
+        thread_id = chat_svc.create_thread("alice", "Startup Research")
+        with (
+            patch("qna_bot.agent.nodes.ChatGroq", return_value=fake_llm),
+            patch("qna_bot.tools.web_search.SafeWebPageReader.extract_page", side_effect=_fake_extract_page),
+        ):
+            res = chat_svc.run_agentic_turn(
+                user_query="Find five AI startups in India with founders, websites, and funding details.",
+                thread_id=thread_id,
+                user_id="alice",
+                chat_mode="Auto (Agentic)",
+                model_name="openai/gpt-oss-20b",
+                temperature=0.0,
+                max_tokens=1024,
+                system_prompt="",
+            )
+
+        assert "Sarvam AI" in res.answer
+        assert "$41M" in res.answer
+        # Verify opened page content and structured verification were passed to generate_answer
+        passed_msgs = fake_llm.invoke.call_args.args[0]
+        user_payload = str(passed_msgs[-1].content)
+        assert "EXTRACTED WEBPAGE CONTENT" in user_payload
+        assert "CROSS-VERIFIED STRUCTURED EXTRACTION" in user_payload
+        assert "Vivek Raghavan" in user_payload
+
+        # Verify UI citations distinguish accessible vs inaccessible sources cleanly
+        src_statuses = {s["url"]: s.get("status") for s in res.web_sources}
+        assert src_statuses["https://upforge.example.com/startups"] == "inaccessible"
+        assert src_statuses["https://seedtable.example.org/ai-india"] == "read"
+        assert src_statuses["https://tracker.example.net/india-ai"] == "read"
+        assert len(res.tool_executions) == 3
+    finally:
+        memory.close()
+
+

@@ -24,17 +24,23 @@ class TestSessionService(unittest.TestCase):
     def test_save_and_update_recent_chat(self) -> None:
         state = {}
         initialize_session_state(state)
-        long_prompt = "A" * 50
-        state["messages"].append({"role": "user", "content": long_prompt})
+        medium_prompt = "A" * 50
+        state["messages"].append({"role": "user", "content": medium_prompt})
         save_current_chat_to_recent(state)
 
         self.assertEqual(len(state["recent_chats"]), 1)
-        self.assertEqual(state["recent_chats"][0]["title"], ("A" * 36) + "...")
+        self.assertEqual(state["recent_chats"][0]["title"], medium_prompt)
 
         state["messages"].append({"role": "assistant", "content": "Response"})
         save_current_chat_to_recent(state)
         self.assertEqual(len(state["recent_chats"]), 1)
         self.assertEqual(len(state["recent_chats"][0]["messages"]), 2)
+
+        long_state = {}
+        initialize_session_state(long_state)
+        long_state["messages"].append({"role": "user", "content": "B" * 150})
+        save_current_chat_to_recent(long_state)
+        self.assertEqual(long_state["recent_chats"][0]["title"], ("B" * 120) + "...")
 
     def test_start_new_chat_archives_previous_and_resets(self) -> None:
         state = {}

@@ -1,155 +1,83 @@
-# QnAGPT – Personalized Agentic RAG Assistant
+# QnAGPT – Production-Ready Multi-User Agentic AI Workspace
 
-An enterprise-grade, multimodal **Agentic RAG Chatbot** built with **Streamlit**, **LangChain**, **LangGraph**, **Groq**, **Hugging Face Embeddings**, **FAISS**, **DuckDuckGo**, and **SQLite**.
-
----
-
-## Architecture Overview
-
-The application is divided into two cooperating subsystems orchestrated by a compiled **LangGraph `StateGraph`** inside [`qna_bot/`](qna_bot/):
-
-1. **Document Intelligence (`qna_bot/rag/`)**:
-   - Multi-format ingestion for **PDF**, **TXT**, **DOCX**, and **CSV** (`PyPDFLoader`, `TextLoader`, `Docx2txtLoader`, `CSVLoader`).
-   - Size/extension validation, temporary file isolation, text cleaning, recursive chunking (`CHUNK_SIZE = 1000`, `CHUNK_OVERLAP = 200`), and SHA-256 deduplication.
-   - Local **Hugging Face** embeddings (`sentence-transformers/all-MiniLM-L6-v2`, CPU/CUDA, normalized vectors, no OpenAI key required).
-   - User-scoped **FAISS** persistence under `data/vector_store/<user_id>/` with SHA-256 index integrity verification and a modular `VectorStoreBackend` interface ready for future Qdrant Cloud migration.
-2. **Agentic Intelligence (`qna_bot/agent/` & `qna_bot/tools/`)**:
-   - Stateful **LangGraph `StateGraph`** with conditional routing and bounded retries:
-     `analyze_query` -> (`direct_answer` + `ToolNode` | `rewrite_query` -> `retrieve_documents` -> `grade_documents` | `web_search`) -> `generate_answer` -> `validate_answer`.
-   - **Query Analysis & Rewriting**: Classifies queries (`GENERAL`, `DOCUMENT`, `WEB_SEARCH`, `FOLLOW_UP`) and turns conversational follow-ups into standalone search queries.
-   - **Document Grading & Validation**: Filters irrelevant chunks, prevents infinite loops (`max_retrieval_retries = 2`, `max_validation_retries = 1`), and validates document-grounded citations.
-   - **Web Search & Tools**: DuckDuckGo search preserving source URLs alongside user-scoped document tools (`retrieve_uploaded_documents`, `summarize_uploaded_documents`).
-   - **Persistent SQLite Memory**: `langgraph-checkpoint-sqlite` (`SqliteSaver`) in `data/chatbot.db` with unique `thread_id`s and server-side `user_id` isolation.
+An enterprise-grade, light-mode **Multi-User Agentic AI Platform** powered by **Streamlit**, **LangChain**, **LangGraph**, **Groq**, **Hugging Face Embeddings**, **Qdrant** (`Local` & `Cloud`), **SQLite + SQLAlchemy 2.x + Alembic**, **Local Filesystem Storage**, **Model Context Protocol (MCP)**, and **Deep Web Research**.
 
 ---
 
-## Project Structure
+## 1. Platform Overview
+
+1. **Multi-User Authentication & Strict Isolation**: Email + Password login (`Argon2id` via `argon2-cffi`), Google & GitHub OAuth2 (`Authlib`), server-verified opaque sessions in SQLite, login rate limiting, profile/password management, and permanent account deletion.
+2. **Knowledge (Agentic RAG + Qdrant + Local Storage)**: Upload PDF, TXT, DOCX, CSV, and MD documents saved safely inside `storage/users/{user_id}/documents/`, embedded locally with `sentence-transformers/all-MiniLM-L6-v2`, and indexed into **Qdrant** (`QDRANT_MODE=local` or `QDRANT_MODE=cloud`) with mandatory `user_id` & `workspace_id` payload filters. Failed Qdrant uploads retain original files locally for one-click retry.
+3. **Connectivity (MCP Host & Client)**: Connect simultaneously to local STDIO and remote Streamable HTTP / SSE MCP servers using the official `mcp` Python SDK (`mcp>=2.3.0`), Official Registry & Glama marketplace discovery, OAuth 2.1 PKCE, and Fernet-encrypted credentials (`mcp_credentials`).
+4. **Autonomy & Deep Web Research (LangGraph + HITL)**: Stateful `StateGraph` with Agent vs Response LLM separation (`tool_choice="auto"`), DDGS search + SSRF-protected webpage HTML/table extraction + cross-source verification, and backend-enforced `ApprovalManager` `interrupt()` / `Command(resume=...)`.
+
+---
+
+## 2. Architecture & Design Documentation
+
+Comprehensive engineering documentation lives in [`docs/`](docs/):
+- [`docs/HLD.md`](docs/HLD.md) & [`docs/LLD.md`](docs/LLD.md) — High-level & low-level design
+- [`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md) — SQLite + SQLAlchemy 2.x + Alembic ER schema
+- [`docs/AUTHENTICATION_FLOW.md`](docs/AUTHENTICATION_FLOW.md) — Argon2id, OAuth2 PKCE, and session flow
+- [`docs/AGENT_ARCHITECTURE.md`](docs/AGENT_ARCHITECTURE.md) — LangGraph orchestration & deep web research
+- [`docs/MCP_ARCHITECTURE.md`](docs/MCP_ARCHITECTURE.md) — Standalone MCP host & HITL approvals
+- [`docs/SECURITY.md`](docs/SECURITY.md), [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/BACKUP_AND_RESTORE.md`](docs/BACKUP_AND_RESTORE.md), [`docs/API_AND_SERVICE_CONTRACTS.md`](docs/API_AND_SERVICE_CONTRACTS.md)
 
 ```text
 langchain_01/
+├── alembic.ini                     # Alembic configuration
+├── migrations/                     # Versioned SQLite migrations (0001_initial_platform)
+├── docs/                           # Architecture, DB, Auth, Security & Ops docs
+├── storage/                        # LocalStorageProvider root (gitignored)
+│   ├── backups/                    # Pre-migration & operational snapshots
+│   └── users/{user_id}/            # Isolated documents, images, attachments, exports
 ├── qna_bot/
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── app.py                      # Streamlit entrypoint & workflow orchestrator
-│   ├── cli.py                      # CLI runner (`qna-bot`)
-│   ├── config/
-│   │   ├── __init__.py
-│   │   └── settings.py             # Immutable AppSettings, .env & Streamlit secrets support
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── exceptions.py           # Typed domain exceptions
-│   │   └── logging_config.py       # Idempotent structured logger
-│   ├── agent/
-│   │   ├── __init__.py
-│   │   ├── graph.py                # Compiled LangGraph StateGraph + SqliteSaver
-│   │   ├── memory.py               # Thread management & SQLite checkpointing
-│   │   ├── nodes.py                # All 8 graph nodes + ToolNode wiring
-│   │   ├── prompts.py              # Classification, rewrite, RAG & validation prompts
-│   │   ├── routing.py              # Deterministic conditional edge routers
-│   │   └── state.py                # Typed AgentState with add_messages
-│   ├── rag/
-│   │   ├── __init__.py
-│   │   ├── chunking.py             # Text cleaning & RecursiveCharacterTextSplitter
-│   │   ├── embeddings.py           # Lazy singleton HuggingFaceEmbeddings
-│   │   ├── grader.py               # Relevance grading (RELEVANT/PARTIALLY_RELEVANT/IRRELEVANT)
-│   │   ├── ingestion.py            # Validation, deduplication & batch indexing
-│   │   ├── loaders.py              # PDF, TXT, DOCX, CSV document loaders
-│   │   ├── retriever.py            # User-scoped top-k & MMR retriever
-│   │   └── vector_store.py         # VectorStoreBackend & verified FAISS persistence
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── document_tools.py       # User-isolated LangChain document tools
-│   │   └── web_search.py           # DuckDuckGo web search tool & URL preservation
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── agent_service.py        # ChatGroq streaming & multimodal vision fallback
-│   │   ├── chat_service.py         # LangGraph turn execution & thread persistence
-│   │   ├── document_service.py     # Knowledge base upload, listing & removal
-│   │   ├── export_service.py       # JSON, Markdown & TXT chat exporters
-│   │   ├── image_service.py        # Image validation & base64 encoding
-│   │   └── session_service.py      # Streamlit session state lifecycle
-│   └── ui/
-│       ├── __init__.py
-│       ├── assets/
-│       │   ├── styles.css          # Light, Dark & Auto semantic CSS
-│       │   └── theme.js            # Dynamic theme synchronization
-│       ├── chat_view.py            # Chat bubbles, citations & action controls
-│       ├── components.py           # Header, welcome, sources panel, copy & image UI
-│       ├── sidebar.py              # Mode selector, KB manager, threads, settings, export
-│       └── styles.py               # Cached asset injector
-├── tests/                          # Pytest test suite
-├── archive/                        # Reference / non-production legacy files
-├── .env.example                    # Environment template
-├── pyproject.toml                  # Dependencies & pytest/uv config
-├── requirements.txt                # Pip requirements (Streamlit Cloud compatible)
-└── uv.lock                         # Locked uv dependency graph
+│   ├── app.py                      # Streamlit entrypoint, auth gate & page dispatcher
+│   ├── config/settings.py          # AppSettings & .env loader (Qdrant, OAuth, Groq, MCP)
+│   ├── core/                       # SQLite security, Argon2id, rate limiter, exceptions
+│   ├── models/                     # SQLAlchemy 2.x ORM models (users, sessions, chats, docs, mcp)
+│   ├── schemas/                    # Pydantic v2 DTOs
+│   ├── repositories/               # User-scoped transactional SQLite repositories
+│   ├── storage/                    # StorageProvider ABC & LocalStorageProvider
+│   ├── database/                   # SQLAlchemy engine/WAL PRAGMAs & legacy migration bridge
+│   ├── rag/                        # VectorStoreBackend -> QdrantVectorStoreManager (+ FAISS bridge)
+│   ├── mcp/                        # Official MCP SDK host, vaults, OAuth PKCE & marketplaces
+│   ├── tools/                      # Multi-backend web search, webpage reader & RAG tools
+│   ├── agent/                      # LangGraph StateGraph, memory checkpointer, HITL, mcp_adapter
+│   ├── services/                   # Auth, User, Document, Conversation, Chat, MCP, Suggestion
+│   └── ui/                         # Light-mode SaaS shell, Auth & Account pages, workspace views
+└── tests/                          # Automated unit, integration & Streamlit AppTest suites
 ```
 
 ---
 
-## Setup & Installation
+## 3. Setup & Running Locally
 
-Using `uv` (recommended):
-
-```bash
-uv sync
-```
-
-Or using `pip`:
-
-```bash
-pip install -r requirements.txt
-```
-
-Create a `.env` file in the repository root (see [`.env.example`](.env.example)):
-
-```env
-GROQ_API_KEY=your_groq_api_key_here
-LOG_LEVEL=INFO
-```
-
-*No `OPENAI_API_KEY` is required. Embeddings run locally via `sentence-transformers/all-MiniLM-L6-v2`.*
-
----
-
-## Running Locally
-
-```bash
-uv run streamlit run qna_bot/app.py
-```
-
-Alternative entrypoints:
-
-```bash
-uv run qna-bot
-# or
-python -m qna_bot
-```
+1. **Install dependencies**:
+   ```powershell
+   uv sync
+   ```
+2. **Start Qdrant locally (optional if using Qdrant Cloud)**:
+   ```powershell
+   docker run -d --name qnagpt-qdrant -p 6333:6333 -p 6334:6334 -v "${PWD}\data\qdrant_storage:/qdrant/storage" qdrant/qdrant:latest
+   ```
+3. **Configure `.env`** (see [`.env.example`](.env.example)):
+   - Required for LLM chat: `GROQ_API_KEY`
+   - Optional OAuth2: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+   - Vector DB: `QDRANT_MODE=local` (`QDRANT_URL=http://localhost:6333`) or `QDRANT_MODE=cloud` (`QDRANT_URL`, `QDRANT_API_KEY`)
+4. **Apply database migrations**:
+   ```powershell
+   .\.venv\Scripts\alembic.exe upgrade head
+   ```
+5. **Run the application**:
+   ```powershell
+   .\.venv\Scripts\streamlit.exe run qna_bot/app.py
+   ```
 
 ---
 
-## Chat Modes & Features
+## 4. Automated Verification
 
-- **Auto (Agentic)**: Classifies intent, routes between general conversation, RAG over uploaded documents, tool calling, and DuckDuckGo web search automatically.
-- **Document Chat**: Prioritizes retrieval, semantic grading, citation validation, and expandable document source previews (filename + page number).
-- **General Chat**: Direct Groq conversation and existing multimodal vision analysis (`PNG`, `JPG`, `JPEG`, `WEBP`).
-- **Workspace Isolation**: Documents and SQLite conversation threads are partitioned by `user_id` (`Workspace ID`) on the server side.
-
----
-
-## Testing
-
-```bash
-pytest -v
+```powershell
+.\.venv\Scripts\pytest.exe -v
 ```
-
----
-
-## Streamlit Community Cloud Deployment
-
-1. Push the repository (without `.env`) to GitHub.
-2. In Streamlit Community Cloud, set the **Main file path** to `qna_bot/app.py`.
-3. Add `GROQ_API_KEY` under **App Settings -> Secrets** (`settings.py` reads both environment variables and `st.secrets`).
-4. Dependencies are picked up automatically from `requirements.txt` / `pyproject.toml`.
-
-> **Persistence Note:** Local FAISS indexes (`data/vector_store/`) and SQLite files (`data/chatbot.db`) are suitable for local/single-instance usage, whereas ephemeral cloud containers reset local disk on restart. `VectorStoreBackend` in `qna_bot/rag/vector_store.py` is structured so you can swap in **Qdrant Cloud** and managed PostgreSQL for multi-user cloud persistence without rewriting the RAG or LangGraph pipeline.
