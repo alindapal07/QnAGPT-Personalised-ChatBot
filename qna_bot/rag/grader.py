@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 from qna_bot.config.settings import AppSettings, get_settings
 from qna_bot.core.logging_config import get_logger
 from qna_bot.rag.vector_store import RetrievedChunk
+from dotenv import load_dotenv 
 
+load_dotenv()
 logger = get_logger(__name__)
 
 GradeLabel = Literal["RELEVANT", "PARTIALLY_RELEVANT", "IRRELEVANT"]
@@ -73,7 +75,7 @@ class DocumentGrader:
             model=self.model_name,
             temperature=0.0,
             max_tokens=512,
-            api_key=self.api_key,
+            
         )
 
     def grade(

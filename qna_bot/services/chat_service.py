@@ -59,7 +59,8 @@ def _build_node_stage_event(
         label = "Searching Knowledge Base"
         detail = f"{len(update.get('retrieved_documents') or [])} chunks retrieved"
     elif node_name == "grade_documents":
-        label = "Checking document relevance"
+        crag_stat = update.get("crag_status")
+        label = f"CRAG evaluation ({crag_stat})" if crag_stat else "Checking document relevance"
         detail = f"{len(update.get('relevant_documents') or [])} relevant"
     elif node_name == "web_search":
         label = "Web search"

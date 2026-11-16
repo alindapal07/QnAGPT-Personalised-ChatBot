@@ -37,6 +37,15 @@ class AgentState(TypedDict, total=False):
     document_search_required: bool
     web_search_required: bool
 
+    # Corrective RAG (CRAG) state
+    crag_enabled: bool
+    crag_status: str
+    crag_decision: str
+    document_evaluations: List[Dict[str, Any]]
+    evidence_bundle: Dict[str, Any]
+    retrieval_attempt_count: int
+    contradiction_detected: bool
+
     # Agentic MCP & HITL Approval state
     available_tools: List[Dict[str, Any]]
     planned_steps: List[str]

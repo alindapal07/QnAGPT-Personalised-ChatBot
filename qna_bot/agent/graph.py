@@ -24,6 +24,7 @@ from qna_bot.agent.state import AgentState
 from qna_bot.config.settings import AppSettings, get_settings
 from qna_bot.database.repositories import AuditLogRepository
 from qna_bot.mcp.client_manager import MCPClientManager
+from qna_bot.rag.crag import CRAGPipeline
 from qna_bot.rag.grader import DocumentGrader
 from qna_bot.rag.retriever import DocumentRetriever
 from qna_bot.rag.vector_store import FAISSVectorStoreManager
@@ -56,6 +57,7 @@ def build_agent_graph(
     memory_manager: Optional[ConversationMemoryManager] = None,
     mcp_manager: Optional[MCPClientManager] = None,
     approval_manager: Optional[ApprovalManager] = None,
+    crag_pipeline: Optional[CRAGPipeline] = None,
     settings: Optional[AppSettings] = None,
     use_cache: bool = False,
 ) -> Any:
@@ -114,6 +116,7 @@ def build_agent_graph(
         mcp_manager=mcp_manager,
         approval_manager=approval_manager,
         audit_repo=AuditLogRepository(mcp_manager.db) if mcp_manager is not None else None,
+        crag_pipeline=crag_pipeline,
     )
 
     workflow = StateGraph(AgentState)

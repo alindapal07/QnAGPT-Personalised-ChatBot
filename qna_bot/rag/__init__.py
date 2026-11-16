@@ -1,6 +1,22 @@
 """RAG subsystem exports (loaders, chunking, embeddings, FAISS/Qdrant stores, ingestion, retrieval, grading)."""
 
 from qna_bot.rag.chunking import clean_text, split_documents
+from qna_bot.rag.crag import (
+    CRAGDecision,
+    CRAGDocument,
+    CRAGEvaluation,
+    CRAGPipeline,
+    CRAGRouter,
+    DocumentEvaluator,
+    DocumentFilter,
+    EvidenceAssembler,
+    EvidenceBundle,
+    EvidenceItem,
+    EvidenceStatus,
+    QueryRewriter,
+    RelevanceGrade,
+    RewrittenQuery,
+)
 from qna_bot.rag.embeddings import get_embeddings, reset_embeddings_cache
 from qna_bot.rag.grader import DocumentGrader, GradeLabel, GradingResult
 from qna_bot.rag.ingestion import DocumentIngestor, IngestionResult
@@ -20,15 +36,29 @@ from qna_bot.rag.vector_store import (
 )
 
 __all__ = [
+    "CRAGDecision",
+    "CRAGDocument",
+    "CRAGEvaluation",
+    "CRAGPipeline",
+    "CRAGRouter",
+    "DocumentEvaluator",
+    "DocumentFilter",
     "DocumentGrader",
     "DocumentIngestor",
     "DocumentRetriever",
+    "EvidenceAssembler",
+    "EvidenceBundle",
+    "EvidenceItem",
+    "EvidenceStatus",
     "FAISSVectorStoreManager",
     "GradeLabel",
     "GradingResult",
     "IngestionResult",
     "QdrantVectorStoreManager",
+    "QueryRewriter",
+    "RelevanceGrade",
     "RetrievedChunk",
+    "RewrittenQuery",
     "SUPPORTED_EXTENSIONS",
     "VectorStoreBackend",
     "add_documents",

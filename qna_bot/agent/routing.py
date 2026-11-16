@@ -37,17 +37,37 @@ def route_after_grading(
     max_retrieval_retries: int = 2,
 ) -> Literal["generate_answer", "rewrite_query", "web_search"]:
     """Route after document grading: answer if relevant, retry once if allowed, or fall back."""
+    crag_decision = (state.get("crag_decision") or "").upper()
+    retry_count = int(state.get("retry_count", 0))
+    chat_mode = state.get("chat_mode", "Auto (Agentic)")
+    can_web_search = chat_mode == "Auto (Agentic)" and state.get("query_type") != "DOCUMENT_ONLY"
+
+    if crag_decision:
+        if crag_decision == "CORRECT":
+            return "generate_answer"
+        if crag_decision == "AMBIGUOUS":
+            if retry_count < max_retrieval_retries:
+                return "rewrite_query"
+            if can_web_search:
+                return "web_search"
+            return "generate_answer"
+        if crag_decision == "CONTRADICTORY":
+            if can_web_search:
+                return "web_search"
+            return "generate_answer"
+        if crag_decision == "INCORRECT":
+            if can_web_search:
+                return "web_search"
+            return "generate_answer"
+
     relevant = state.get("relevant_documents") or []
     if relevant:
         return "generate_answer"
 
-    retry_count = int(state.get("retry_count", 0))
-    chat_mode = state.get("chat_mode", "Auto (Agentic)")
-
     if retry_count < min(max_retrieval_retries, 1):
         return "rewrite_query"
 
-    if chat_mode == "Auto (Agentic)" and state.get("query_type") != "DOCUMENT_ONLY":
+    if can_web_search:
         return "web_search"
 
     return "generate_answer"

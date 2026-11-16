@@ -122,6 +122,17 @@ class AppSettings:
     max_retrieval_retries: int = 2
     max_validation_retries: int = 1
 
+    # Corrective RAG (CRAG) settings
+    crag_enabled: bool = False
+    crag_relevance_threshold: float = 0.70
+    crag_confidence_threshold: float = 0.70
+    crag_coverage_threshold: float = 0.65
+    crag_max_retrieval_attempts: int = 2
+    crag_max_rewrite_attempts: int = 2
+    crag_max_web_search_attempts: int = 1
+    crag_web_fallback_enabled: bool = True
+    crag_abstention_enabled: bool = True
+
     # Qdrant vector store settings
     qdrant_mode: str = "local"
     qdrant_url: str = "http://localhost:6333"
@@ -206,6 +217,45 @@ def load_settings() -> AppSettings:
     else:
         qdrant_mode = "local"
 
+    crag_enabled_raw = _read_config_value("CRAG_ENABLED", "true").lower()
+    crag_enabled = crag_enabled_raw not in ("0", "false", "no", "off")
+
+    try:
+        crag_rel_thresh = float(_read_config_value("CRAG_RELEVANCE_THRESHOLD", "0.70"))
+    except ValueError:
+        crag_rel_thresh = 0.70
+
+    try:
+        crag_conf_thresh = float(_read_config_value("CRAG_CONFIDENCE_THRESHOLD", "0.70"))
+    except ValueError:
+        crag_conf_thresh = 0.70
+
+    try:
+        crag_cov_thresh = float(_read_config_value("CRAG_COVERAGE_THRESHOLD", "0.65"))
+    except ValueError:
+        crag_cov_thresh = 0.65
+
+    try:
+        crag_max_retrievals = max(1, int(_read_config_value("CRAG_MAX_RETRIEVAL_ATTEMPTS", "2")))
+    except ValueError:
+        crag_max_retrievals = 2
+
+    try:
+        crag_max_rewrites = max(1, int(_read_config_value("CRAG_MAX_REWRITE_ATTEMPTS", "2")))
+    except ValueError:
+        crag_max_rewrites = 2
+
+    try:
+        crag_max_web = max(0, int(_read_config_value("CRAG_MAX_WEB_SEARCH_ATTEMPTS", "1")))
+    except ValueError:
+        crag_max_web = 1
+
+    crag_web_raw = _read_config_value("CRAG_WEB_FALLBACK_ENABLED", "true").lower()
+    crag_web_fallback = crag_web_raw not in ("0", "false", "no", "off")
+
+    crag_abs_raw = _read_config_value("CRAG_ABSTENTION_ENABLED", "true").lower()
+    crag_abstention = crag_abs_raw not in ("0", "false", "no", "off")
+
     return AppSettings(
         groq_api_key=api_key,
         log_level=os.getenv("LOG_LEVEL", "INFO").strip() or "INFO",
@@ -215,6 +265,15 @@ def load_settings() -> AppSettings:
         sqlite_db_path=sqlite_db_path,
         database_url=_read_config_value("DATABASE_URL"),
         langgraph_checkpoint_db=checkpoint_db_path,
+        crag_enabled=crag_enabled,
+        crag_relevance_threshold=crag_rel_thresh,
+        crag_confidence_threshold=crag_conf_thresh,
+        crag_coverage_threshold=crag_cov_thresh,
+        crag_max_retrieval_attempts=crag_max_retrievals,
+        crag_max_rewrite_attempts=crag_max_rewrites,
+        crag_max_web_search_attempts=crag_max_web,
+        crag_web_fallback_enabled=crag_web_fallback,
+        crag_abstention_enabled=crag_abstention,
         qdrant_mode=qdrant_mode,
         qdrant_url=qdrant_url,
         qdrant_api_key=qdrant_api_key,

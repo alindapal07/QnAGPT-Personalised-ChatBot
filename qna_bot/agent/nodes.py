@@ -39,6 +39,15 @@ from qna_bot.database.repositories import AuditLogRepository
 from qna_bot.mcp.client_manager import MCPClientManager
 from qna_bot.mcp.models import DiscoveredTool
 from qna_bot.mcp.security import format_masked_arguments, sanitize_tool_output
+from qna_bot.rag.crag import (
+    CRAGDecision,
+    CRAGDocument,
+    CRAGEvaluation,
+    CRAGPipeline,
+    EvidenceBundle,
+    EvidenceStatus,
+    RelevanceGrade,
+)
 from qna_bot.rag.grader import DocumentGrader
 from qna_bot.rag.retriever import DocumentRetriever
 from qna_bot.rag.vector_store import RetrievedChunk
@@ -390,12 +399,16 @@ class AgentNodeSuite:
         approval_manager: Optional[ApprovalManager] = None,
         audit_repo: Optional[AuditLogRepository] = None,
         page_reader: Optional[SafeWebPageReader] = None,
+        crag_pipeline: Optional[CRAGPipeline] = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.retriever = retriever
         self.grader = grader
         self.web_searcher = web_searcher
         self.page_reader = page_reader or SafeWebPageReader()
+        self.crag_pipeline = crag_pipeline or CRAGPipeline(settings=self.settings)
+        self.crag_pipeline.evaluator._make_llm = self._make_llm  # type: ignore[assignment]
+        self.crag_pipeline.query_rewriter._make_llm = self._make_llm  # type: ignore[assignment]
         self.tools = list(tools)
         self.builtin_tools_map: Dict[str, BaseTool] = {t.name: t for t in tools}
         self.model_name = model_name or self.settings.default_text_model
@@ -550,6 +563,13 @@ class AgentNodeSuite:
             "sources": [],
             "web_sources": [],
             "context": "",
+            "crag_enabled": True,
+            "crag_status": "PENDING",
+            "crag_decision": "",
+            "document_evaluations": [],
+            "evidence_bundle": {},
+            "retrieval_attempt_count": 0,
+            "contradiction_detected": False,
             "web_retry_count": 0,
             "available_tools": [],
             "planned_steps": [],
@@ -673,6 +693,28 @@ class AgentNodeSuite:
         original = (state.get("user_query") or "").strip()
         prev_rewrite = (state.get("rewritten_query") or "").strip()
         retry_count = int(state.get("retry_count", 0))
+
+        if getattr(self.settings, "crag_enabled", True):
+            evaluations = state.get("document_evaluations") or []
+            last_eval: Optional[CRAGEvaluation] = None
+            if evaluations:
+                try:
+                    last_eval = CRAGEvaluation.model_validate(evaluations[-1])
+                except Exception:
+                    pass
+            prev_rewrites = [prev_rewrite] if prev_rewrite else []
+            rewritten_obj = self.crag_pipeline.rewrite_query(
+                query=original,
+                messages=state.get("messages") or [],
+                previous_rewrites=prev_rewrites,
+                attempt=retry_count + 1,
+                evaluation=last_eval,
+            )
+            return {
+                "rewritten_query": rewritten_obj.rewritten_query,
+                "activity": f"Refining search query: {rewritten_obj.rewritten_query[:60]}...",
+            }
+
         history_txt = _recent_history_text(state.get("messages") or [])
 
         if not self.api_key:
@@ -705,9 +747,10 @@ class AgentNodeSuite:
     # ── RAG & Web Search Nodes ────────────────────────────────────────────────
 
     def retrieve_documents(self, state: AgentState) -> Dict[str, Any]:
-        """Retrieve top-k chunks from the user's scoped FAISS vector store."""
+        """Retrieve top-k chunks from the user's scoped FAISS or Qdrant vector store."""
         query = (state.get("rewritten_query") or state.get("user_query") or "").strip()
         user_id = state.get("user_id") or self.settings.default_user_id
+        retrieval_count = int(state.get("retrieval_attempt_count", 0)) + 1
 
         try:
             chunks = self.retriever.retrieve(
@@ -726,19 +769,82 @@ class AgentNodeSuite:
                 }
                 for c in chunks
             ]
-            return {"retrieved_documents": serialized, "activity": "Searching uploaded documents..."}
+            return {
+                "retrieved_documents": serialized,
+                "retrieval_attempt_count": retrieval_count,
+                "activity": "Searching uploaded documents...",
+            }
         except Exception as exc:
             logger.warning("Retrieval node error: %s", exc)
             return {
                 "retrieved_documents": [],
+                "retrieval_attempt_count": retrieval_count,
                 "error": f"Document retrieval failed: {exc}",
                 "activity": "Searching uploaded documents...",
             }
 
     def grade_documents(self, state: AgentState) -> Dict[str, Any]:
-        """Filter retrieved chunks for semantic relevance and build citations."""
+        """Filter retrieved chunks for semantic relevance, evaluate via CRAG, and build citations."""
         query = (state.get("rewritten_query") or state.get("user_query") or "").strip()
         raw_docs = state.get("retrieved_documents") or []
+
+        if getattr(self.settings, "crag_enabled", True):
+            crag_docs = [
+                CRAGDocument(
+                    content=str(d.get("content", "")),
+                    metadata=dict(d.get("metadata") or {}),
+                    score=float(d.get("score", 0.0)),
+                    document_id=str(d.get("document_id", "")),
+                    source=str(d.get("source", "Unknown")),
+                    page=d.get("page"),
+                    chunk_index=d.get("chunk_index"),
+                )
+                for d in raw_docs
+            ]
+            chat_mode = state.get("chat_mode", "Auto (Agentic)")
+            retrieval_attempts = int(state.get("retrieval_attempt_count", 1))
+            web_attempts = int(state.get("web_retry_count", 0))
+
+            evaluation, bundle, decision = self.crag_pipeline.evaluate_and_assemble(
+                query=query,
+                documents=crag_docs,
+                retrieval_attempts=retrieval_attempts,
+                web_search_attempts=web_attempts,
+                chat_mode=chat_mode,
+            )
+
+            relevant_dicts = [
+                {
+                    "content": item.text,
+                    "metadata": item.metadata,
+                    "score": item.score,
+                    "document_id": item.document_id or "",
+                    "source": item.source,
+                    "page": item.page,
+                }
+                for item in bundle.items
+                if not item.is_web
+            ]
+
+            citations = bundle.sources
+            context_str = bundle.synthesized_context
+            retry_count = int(state.get("retry_count", 0))
+            if decision == CRAGDecision.AMBIGUOUS:
+                retry_count += 1
+
+            return {
+                "relevant_documents": relevant_dicts,
+                "sources": citations,
+                "context": context_str,
+                "retry_count": retry_count,
+                "document_evaluations": [evaluation.to_dict()],
+                "evidence_bundle": bundle.to_dict(),
+                "crag_status": bundle.status.value,
+                "crag_decision": decision.value,
+                "contradiction_detected": bundle.contradiction_detected,
+                "activity": f"CRAG evaluated documents as {evaluation.relevance_grade.value}...",
+            }
+
         chunks = [
             RetrievedChunk(
                 content=str(d.get("content", "")),
@@ -842,12 +948,22 @@ class AgentNodeSuite:
             )
 
         existing_execs = list(state.get("tool_executions") or [])
-        return {
+        result_payload: Dict[str, Any] = {
             "opened_webpages": opened_pages,
             "web_sources": updated_sources or list(state.get("web_sources") or []),
             "tool_executions": existing_execs + new_execs,
             "activity": "Reading webpage content...",
         }
+        if getattr(self.settings, "crag_enabled", True):
+            web_bundle = self.crag_pipeline.assemble_web_evidence(
+                web_results=web_results,
+                opened_pages=opened_pages,
+                query=query,
+            )
+            result_payload["evidence_bundle"] = web_bundle.to_dict()
+            result_payload["crag_status"] = web_bundle.status.value
+            result_payload["sources"] = web_bundle.sources
+        return result_payload
 
     def extract_and_verify(self, state: AgentState) -> Dict[str, Any]:
         """Extract structured entity records strictly from opened webpages and cross-verify across sources."""
@@ -900,9 +1016,11 @@ class AgentNodeSuite:
         verified_context = format_verified_research_for_prompt(verified_research)
 
         if not doc_context and not web_context and not verified_context:
+            if getattr(self.settings, "crag_abstention_enabled", True):
+                self.crag_pipeline.metrics.record_abstention()
             err_note = state.get("error")
             msg = (
-                "I could not find relevant information in your uploaded documents"
+                "I could not find sufficient verifiable information in your uploaded documents"
                 + (" or via web search" if state.get("chat_mode") == "Auto (Agentic)" else "")
                 + " to answer this question accurately."
             )
@@ -920,6 +1038,13 @@ class AgentNodeSuite:
 
         custom_prompt = (state.get("system_prompt") or "").strip()
         system_content = QNAGPT_SYSTEM_PROMPT + RESPONSE_ONLY_SYSTEM_ADDENDUM
+        if state.get("contradiction_detected"):
+            system_content += (
+                "\n\n[CRAG DIRECTIVE - CONTRADICTION DETECTED]\n"
+                "The retrieved evidence contains conflicting facts or assertions across sources. "
+                "You MUST present both conflicting perspectives neutrally, cite each conflicting source "
+                "explicitly, and refrain from asserting either claim as absolute truth."
+            )
         if custom_prompt:
             system_content += f"\n\nAdditional user preferences (only if consistent with above rules):\n{custom_prompt}"
 
