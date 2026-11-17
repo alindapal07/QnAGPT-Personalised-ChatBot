@@ -6,8 +6,8 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 from qna_bot.core.logging_config import get_logger
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.models import DiscoveredTool
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.models import DiscoveredTool
 
 logger = get_logger(__name__)
 

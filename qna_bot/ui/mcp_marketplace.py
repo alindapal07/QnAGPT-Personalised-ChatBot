@@ -9,9 +9,9 @@ import streamlit as st
 
 from qna_bot.config.settings import AppSettings
 from qna_bot.database.models import MCPServerRecord
-from qna_bot.mcp.exceptions import MCPError
-from qna_bot.mcp.models import MCPServerStatus
-from qna_bot.mcp.registry.models import RegistryListing, TransportOption
+from qna_bot.mcp_client.exceptions import MCPError
+from qna_bot.mcp_client.models import MCPServerStatus
+from qna_bot.mcp_client.registry.models import RegistryListing, TransportOption
 from qna_bot.services.mcp_service import MCPService
 from qna_bot.ui.design_system import (
     render_empty_state,
@@ -200,17 +200,6 @@ def _render_connect_panel(
             key=f"det_auth_{listing.connector_id}",
         )
 
-        allow_insecure = st.checkbox(
-            "Allow HTTP (non-TLS endpoint)",
-            value=rec.allow_insecure_http if rec else selected_opt.url.startswith("http://"),
-            key=f"det_http_{listing.connector_id}",
-        )
-        allow_private = st.checkbox(
-            "Allow localhost / private network target (controlled local policy)",
-            value=rec.allow_private_network if rec else False,
-            key=f"det_priv_{listing.connector_id}",
-        )
-
         header_name = selected_opt.required_headers[0] if selected_opt.required_headers else (
             "X-API-Key" if auth_type in ("api_key", "api_key_env") else "Authorization"
         )
@@ -218,27 +207,35 @@ def _render_connect_panel(
         env_var_ref = ""
 
         if auth_type in ("bearer_token", "api_key"):
-            header_name = st.text_input(
-                "HTTP Header Name",
-                value=rec.auth_header_name if rec else header_name,
-                key=f"det_hdr_{listing.connector_id}",
-            )
             secret_val = st.text_input(
-                "Secret Token / API Key (encrypted immediately via Fernet at rest)",
+                "API Key / Secret Token (encrypted at rest)",
                 type="password",
+                placeholder="Paste your API key or token here...",
                 key=f"det_sec_{listing.connector_id}",
             )
         elif auth_type in ("bearer_env", "api_key_env"):
-            header_name = st.text_input(
-                "HTTP Header Name",
-                value=rec.auth_header_name if rec else header_name,
-                key=f"det_ehdr_{listing.connector_id}",
-            )
             env_var_ref = st.text_input(
                 "Environment Variable Name",
                 value=rec.auth_env_var if rec else "",
                 placeholder="MCP_SERVER_TOKEN",
                 key=f"det_evar_{listing.connector_id}",
+            )
+
+        with st.expander("Advanced Network & Header Settings (Optional)", expanded=False):
+            header_name = st.text_input(
+                "Custom HTTP Header Name",
+                value=rec.auth_header_name if rec else header_name,
+                key=f"det_hdr_{listing.connector_id}",
+            )
+            allow_insecure = st.checkbox(
+                "Allow HTTP / Insecure TLS",
+                value=rec.allow_insecure_http if rec else selected_opt.url.startswith("http://"),
+                key=f"det_http_{listing.connector_id}",
+            )
+            allow_private = st.checkbox(
+                "Allow localhost / private network target",
+                value=rec.allow_private_network if rec else False,
+                key=f"det_priv_{listing.connector_id}",
             )
 
         if auth_type == "oauth":
@@ -779,34 +776,116 @@ def render_mcp_marketplace_page(
                     f'<span class="mkt-tag">{html.escape(item.primary_install_info[:28])}</span>'
                     f"</div>"
                 )
-                b_det, b_act = st.columns(2)
-                with b_det:
-                    if st.button("Details", key=f"mkt_det_{idx}_{item.connector_id}", use_container_width=True):
-                        st.session_state["mkt_selected_connector"] = item
-                        st.rerun()
-                with b_act:
-                    if inst is not None and inst[1].connected:
-                        if st.button("Disconnect", key=f"mkt_disc_{idx}_{item.connector_id}", use_container_width=True):
-                            mcp_service.disconnect(inst[0].server_id, user_id)
+                needs_key = any(m in ("api_key", "bearer_token") for m in item.auth_methods)
+                is_oauth = any(m == "oauth" for m in item.auth_methods)
+                inline_box_key = f"mkt_inline_key_{item.connector_id}"
+                inst_err = (inst[1].last_error or "").lower() if inst else ""
+                has_auth_err = inst is not None and ("401" in inst_err or "unauth" in inst_err or "api key" in inst_err or "token" in inst_err)
+                show_inline_box = bool(st.session_state.get(inline_box_key)) or has_auth_err
+
+                if show_inline_box:
+                    st.caption(f"🔑 **Enter API Key for {html.escape(item.title)}:**")
+                    if _safe_http_url(item.listing_url):
+                        st.caption(f"[Get your API Key from {html.escape(item.title)} ↗]({html.escape(item.listing_url, quote=True)})")
+                    user_key = st.text_input(
+                        "API Key or Token",
+                        type="password",
+                        placeholder="Paste API key or token...",
+                        label_visibility="collapsed",
+                        key=f"mkt_key_{idx}_{item.connector_id}",
+                    )
+                    ik1, ik2 = st.columns([2, 1])
+                    with ik1:
+                        if st.button("✓ Save & Connect", type="primary", key=f"mkt_ink_conn_{idx}_{item.connector_id}", use_container_width=True):
+                            if not user_key.strip():
+                                st.error("Please enter a valid API Key.")
+                            else:
+                                try:
+                                    opt = item.primary_transport_option
+                                    is_bearer = user_key.strip().lower().startswith("bearer ")
+                                    a_type = "bearer_token" if is_bearer else ("api_key" if "api_key" in item.auth_methods else "bearer_token")
+                                    hdr = opt.required_headers[0] if opt.required_headers else ("Authorization" if is_bearer else "X-API-Key")
+                                    if inst is not None:
+                                        if a_type == "api_key":
+                                            mcp_service.store_api_key(user_id, inst[0].server_id, user_key.strip(), header_name=hdr)
+                                        else:
+                                            mcp_service.store_bearer_token(user_id, inst[0].server_id, user_key.strip(), header_name=hdr)
+                                        st_out = mcp_service.connect(inst[0].server_id, user_id)
+                                    else:
+                                        _, st_out = mcp_service.install_from_listing(
+                                            user_id=user_id,
+                                            listing=item,
+                                            transport_option=opt,
+                                            auth_type=a_type,
+                                            api_key=user_key.strip() if a_type == "api_key" else "",
+                                            bearer_token=user_key.strip() if a_type == "bearer_token" else "",
+                                            auth_header_name=hdr,
+                                            auto_connect=True,
+                                            stdio_confirmed=True,
+                                        )
+                                    st.session_state[inline_box_key] = False
+                                    t_cnt = st_out.tool_count if st_out else 0
+                                    st.toast(f"✓ Connected to {item.title}! ({t_cnt} tools ready)")
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(str(exc))
+                    with ik2:
+                        if st.button("Cancel", key=f"mkt_ink_cancel_{idx}_{item.connector_id}", use_container_width=True):
+                            st.session_state[inline_box_key] = False
                             st.rerun()
-                    elif inst is not None:
-                        if st.button("Connect", type="primary", key=f"mkt_reconn_{idx}_{item.connector_id}", use_container_width=True):
-                            try:
-                                mcp_service.connect(inst[0].server_id, user_id)
-                                st.rerun()
-                            except Exception:
-                                st.session_state["mkt_selected_connector"] = item
-                                st.rerun()
-                    else:
-                        act_label = "Connect" if item.direct_connectable else "Setup Guide"
-                        if st.button(
-                            act_label,
-                            type="primary" if item.direct_connectable else "secondary",
-                            key=f"mkt_conn_{idx}_{item.connector_id}",
-                            use_container_width=True,
-                        ):
+                else:
+                    b_det, b_act = st.columns(2)
+                    with b_det:
+                        if st.button("Details", key=f"mkt_det_{idx}_{item.connector_id}", use_container_width=True):
                             st.session_state["mkt_selected_connector"] = item
                             st.rerun()
+                    with b_act:
+                        if inst is not None and inst[1].connected:
+                            if st.button("Disconnect", key=f"mkt_disc_{idx}_{item.connector_id}", use_container_width=True):
+                                mcp_service.disconnect(inst[0].server_id, user_id)
+                                st.rerun()
+                        elif inst is not None:
+                            if st.button("Connect", type="primary", key=f"mkt_reconn_{idx}_{item.connector_id}", use_container_width=True):
+                                try:
+                                    mcp_service.connect(inst[0].server_id, user_id)
+                                    st.rerun()
+                                except Exception:
+                                    if needs_key or "401" in str(inst[1].last_error):
+                                        st.session_state[inline_box_key] = True
+                                        st.rerun()
+                                    else:
+                                        st.session_state["mkt_selected_connector"] = item
+                                        st.rerun()
+                        else:
+                            if needs_key:
+                                if st.button("Connect with Key", type="primary", icon=":material/key:", key=f"mkt_conn_{idx}_{item.connector_id}", use_container_width=True):
+                                    st.session_state[inline_box_key] = True
+                                    st.rerun()
+                            elif is_oauth:
+                                if st.button("Connect with OAuth", type="primary", icon=":material/lock:", key=f"mkt_conn_{idx}_{item.connector_id}", use_container_width=True):
+                                    st.session_state["mkt_selected_connector"] = item
+                                    st.rerun()
+                            elif item.direct_connectable:
+                                if st.button("One-Tap Connect", type="primary", icon=":material/bolt:", key=f"mkt_conn_{idx}_{item.connector_id}", use_container_width=True):
+                                    try:
+                                        opt = item.primary_transport_option
+                                        _, st_out = mcp_service.install_from_listing(
+                                            user_id=user_id,
+                                            listing=item,
+                                            transport_option=opt,
+                                            auth_type="none",
+                                            auto_connect=True,
+                                            stdio_confirmed=True,
+                                        )
+                                        t_cnt = st_out.tool_count if st_out else 0
+                                        st.toast(f"✓ Connected to {item.title}! ({t_cnt} tools ready)")
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(str(exc))
+                            else:
+                                if st.button("Setup Guide", key=f"mkt_conn_{idx}_{item.connector_id}", use_container_width=True):
+                                    st.session_state["mkt_selected_connector"] = item
+                                    st.rerun()
 
     if cursor_stack or (has_next and next_cursor):
         st.divider()

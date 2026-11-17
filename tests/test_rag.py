@@ -311,3 +311,84 @@ def test_document_grader_short_circuits_low_scores_and_filters_chunks() -> None:
     assert graded.used_llm is True
     assert len(graded.relevant_chunks) == 1
     assert graded.relevant_chunks[0].source == "rag.pdf"
+
+
+def test_faiss_clear_removes_user_data_and_leaves_other_users_intact(tmp_path: Path) -> None:
+    store = FAISSVectorStoreManager(
+        base_dir=tmp_path / "vs",
+        embeddings=DeterministicTestEmbeddings(),
+    )
+    docs_a = [Document(page_content="Alice report on finance.", metadata={"source": "fin.txt"})]
+    docs_b = [Document(page_content="Bob report on weather.", metadata={"source": "wea.txt"})]
+
+    store.add_documents(docs_a, user_id="alice", document_meta={"filename": "fin.txt"})
+    store.add_documents(docs_b, user_id="bob", document_meta={"filename": "wea.txt"})
+
+    assert len(store.list_documents("alice")) == 1
+    assert len(store.list_documents("bob")) == 1
+
+    # Clear Alice
+    store.clear("alice")
+    assert store.list_documents("alice") == []
+    assert store.search_documents("finance", user_id="alice") == []
+
+    # Bob must be untouched
+    assert len(store.list_documents("bob")) == 1
+    bob_hits = store.search_documents("weather", user_id="bob")
+    assert len(bob_hits) > 0
+
+
+def test_faiss_search_edge_cases(tmp_path: Path) -> None:
+    store = FAISSVectorStoreManager(
+        base_dir=tmp_path / "vs",
+        embeddings=DeterministicTestEmbeddings(),
+    )
+    docs = [Document(page_content="Python testing and vector search.", metadata={"source": "test.txt"})]
+    store.add_documents(docs, user_id="alice", document_meta={"filename": "test.txt"})
+
+    # Empty and whitespace queries return empty lists without crashing
+    assert store.search_documents("", user_id="alice") == []
+    assert store.search_documents("   \n\t  ", user_id="alice") == []
+
+    # Invalid top_k returns empty list
+    assert store.search_documents("python", user_id="alice", top_k=0) == []
+    assert store.search_documents("python", user_id="alice", top_k=-5) == []
+
+    # Extremely long query string (10,000 chars) executes cleanly without crashing
+    giant_query = "python " * 1500
+    hits = store.search_documents(giant_query, user_id="alice", top_k=2)
+    assert len(hits) > 0
+
+
+def test_loader_rejects_empty_whitespace_only_file() -> None:
+    # Bytes with only whitespace
+    with pytest.raises(DocumentIngestionError, match="contains no extractable text"):
+        load_document_bytes(b"   \n\t   \n  ", "whitespace.txt")
+
+
+def test_loader_unicode_and_special_characters() -> None:
+    content = "Hello 世界 🌍 العربية ∑(x) = y²"
+    docs = load_document_bytes(content.encode("utf-8"), "unicode.txt")
+    assert len(docs) == 1
+    assert "世界" in docs[0].page_content
+    assert "🌍" in docs[0].page_content
+    assert "العربية" in docs[0].page_content
+
+
+def test_faiss_metadata_filtering(tmp_path: Path) -> None:
+    store = FAISSVectorStoreManager(
+        base_dir=tmp_path / "vs",
+        embeddings=DeterministicTestEmbeddings(),
+    )
+    docs_a = [Document(page_content="First python book.", metadata={"source": "book1.txt", "category": "tech"})]
+    docs_b = [Document(page_content="Second python book.", metadata={"source": "book2.txt", "category": "novel"})]
+
+    store.add_documents(docs_a, user_id="alice", document_meta={"filename": "book1.txt", "category": "tech"})
+    store.add_documents(docs_b, user_id="alice", document_meta={"filename": "book2.txt", "category": "novel"})
+
+    # Filter by category == tech
+    hits = store.search_documents("python", user_id="alice", top_k=4, metadata_filter={"category": "tech"})
+    assert len(hits) > 0
+    for h in hits:
+        assert h.metadata.get("category") == "tech"
+

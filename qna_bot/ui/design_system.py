@@ -2,7 +2,7 @@
 
 import html
 import re
-from typing import Any, Dict, List, Literal, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import streamlit as st
 
@@ -18,6 +18,21 @@ COLORS: Dict[str, str] = {
     "success": "#15803D",
     "warning": "#B45309",
     "error": "#B91C1C",
+    # Master Design System Tokens (Phase 8 Premium AI Workspace)
+    "canvas_bg": "#EEF3FB",
+    "main_surface": "#FFFFFF",
+    "secondary_surface": "#F7F8FC",
+    "primary_accent": "#5B61F6",
+    "primary_hover": "#4B50E8",
+    "accent_soft": "#EEF2FF",
+    "accent_border": "#D5DAFC",
+    "main_text": "#202333",
+    "secondary_text": "#73798C",
+    "muted_text": "#A0A5B4",
+    "border_light": "#E9EBF2",
+    "success_new": "#239B72",
+    "warning_new": "#D99A35",
+    "error_new": "#D95363",
 }
 
 ToneType = Literal["neutral", "ok", "warn", "err", "accent"]
@@ -29,6 +44,26 @@ BRAND_SVG = (
     '<path d="M8 9h8M8 13h5M8 17h3"/></svg>'
 )
 
+BRAND_AI_SPARK_SVG = (
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3Z" '
+    'fill="url(#spark_grad)" stroke="#5B61F6" stroke-width="1.5" stroke-linejoin="round"/>'
+    '<defs>'
+    '<linearGradient id="spark_grad" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">'
+    '<stop stop-color="#5B61F6"/>'
+    '<stop offset="1" stop-color="#8B5CF6"/>'
+    '</linearGradient>'
+    '</defs>'
+    '</svg>'
+)
+
+ASSISTANT_BADGE_SVG = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="m12 2 2.2 6.4a1.8 1.8 0 0 0 1.4 1.4L22 12l-6.4 2.2a1.8 1.8 0 0 0-1.4 1.4L12 22l-2.2-6.4a1.8 1.8 0 0 0-1.4-1.4L2 12l6.4-2.2a1.8 1.8 0 0 0 1.4-1.4L12 2Z" '
+    'fill="#5B61F6"/>'
+    '</svg>'
+)
+
 _ICON_DONE_SVG = (
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
     'stroke="#15803D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
@@ -36,9 +71,10 @@ _ICON_DONE_SVG = (
 )
 
 _ICON_ACTIVE_SVG = (
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
-    'stroke="#315EAB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
-    '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="#315EAB"/></svg>'
+    '<svg class="tl-spinner" width="15" height="15" viewBox="0 0 24 24" fill="none" '
+    'stroke="#5B61F6" stroke-width="2.5" stroke-linecap="round">'
+    '<circle cx="12" cy="12" r="9" stroke="#E0E7FF" stroke-width="2.5"/>'
+    '<path d="M12 3a9 9 0 0 1 9 9"/></svg>'
 )
 
 _ICON_PENDING_SVG = (
@@ -118,7 +154,11 @@ def render_metric_strip(items: Sequence[Tuple[str, Any]]) -> None:
     render_html(f'<div class="ds-metric-grid">{cards}</div>')
 
 
-def render_empty_state(title: str, description: str) -> None:
+def render_empty_state(
+    title: str,
+    description: str,
+    icon: Optional[str] = None,
+) -> None:
     """Render clean SaaS empty state block without decorative graphics."""
     render_html(
         f'<div class="ds-empty-state">'
@@ -138,7 +178,26 @@ def render_execution_timeline_html(
         status = str(step.get("state") or "completed")
         label = html.escape(str(step.get("label") or ""))
         detail = str(step.get("detail") or "").strip()
-        detail_html = f'<span class="tl-detail">&mdash; {html.escape(detail)}</span>' if detail else ""
+
+        detail_html = ""
+        if detail:
+            if "::" in detail:
+                parts = detail.split("::", 1)
+                srv_part = parts[0].strip()
+                rest = parts[1].strip()
+                tname_part = rest
+                dur_part = ""
+                if "(" in rest and rest.endswith(")"):
+                    tname_part, dur_raw = rest.rsplit("(", 1)
+                    dur_part = f"({dur_raw.strip()}"
+                    tname_part = tname_part.strip()
+                detail_html = (
+                    f'<span class="tl-chip-srv">{html.escape(srv_part)}</span>'
+                    f'<span class="tl-chip-tool">{html.escape(tname_part)}</span>'
+                    f'{f"<span class=\"tl-chip-dur\">{html.escape(dur_part)}</span>" if dur_part else ""}'
+                )
+            else:
+                detail_html = f'<span class="tl-detail">&mdash; {html.escape(detail)}</span>'
 
         if status == "in_progress":
             icon_svg = _ICON_ACTIVE_SVG
@@ -155,12 +214,13 @@ def render_execution_timeline_html(
 
         rows.append(
             f'<div class="tl-row"><span class="tl-icon">{icon_svg}</span>'
-            f'<div><span class="{lbl_cls}">{label}</span>{detail_html}</div></div>'
+            f'<div class="tl-content"><span class="{lbl_cls}">{label}</span> {detail_html}</div></div>'
         )
 
+    count_str = f'{len(steps)} stage{"s" if len(steps) != 1 else ""}'
     return compact_html(
         f'<div class="tl-wrap">'
-        f'<div class="tl-header">{html.escape(header)}</div>'
+        f'<div class="tl-header-row"><span class="tl-header">{html.escape(header)}</span><span class="tl-step-badge">{count_str}</span></div>'
         f'{"".join(rows)}'
         f"</div>"
     )

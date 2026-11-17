@@ -77,6 +77,10 @@ class ConversationMemoryManager:
                 self._conn.execute(
                     "ALTER TABLE threads ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
                 )
+            if "is_archived" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE threads ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0"
+                )
 
             self._conn.execute(
                 """
@@ -240,6 +244,24 @@ class ConversationMemoryManager:
             except Exception as exc:
                 raise MemoryPersistenceError(f"Failed pinning thread: {exc}") from exc
 
+    def set_thread_archived(self, thread_id: str, user_id: str, archived: bool) -> bool:
+        """Archive or unarchive a conversation thread owned by user_id."""
+        tid, uid = self._validate_ids(thread_id, user_id)
+        with self._lock:
+            try:
+                assert self._conn is not None
+                self._verify_thread_ownership(tid, uid)
+                cur = self._conn.execute(
+                    "UPDATE threads SET is_archived = ? WHERE thread_id = ? AND user_id = ?",
+                    (1 if archived else 0, tid, uid),
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except MemoryPersistenceError:
+                raise
+            except Exception as exc:
+                raise MemoryPersistenceError(f"Failed archiving thread: {exc}") from exc
+
     def update_thread_title(
         self,
         thread_id: str,
@@ -357,6 +379,7 @@ class ConversationMemoryManager:
         self,
         user_id: str,
         search_query: str = "",
+        include_archived: bool = False,
     ) -> List[Dict[str, Any]]:
         """List threads owned by user_id, optionally filtered by title or message content."""
         uid = (user_id or "").strip()
@@ -371,12 +394,14 @@ class ConversationMemoryManager:
                     rows = self._conn.execute(
                         """
                         SELECT t.thread_id, t.title, t.chat_mode, t.is_pinned,
+                               COALESCE(t.is_archived, 0) AS is_archived,
                                t.created_at, t.updated_at,
                                COUNT(m.id) AS message_count
                         FROM threads t
                         LEFT JOIN thread_messages m
                           ON m.thread_id = t.thread_id AND m.user_id = t.user_id
                         WHERE t.user_id = ?
+                          AND (? OR (t.is_archived = 0 OR t.is_archived IS NULL))
                           AND (
                             LOWER(t.title) LIKE ?
                             OR EXISTS (
@@ -389,22 +414,24 @@ class ConversationMemoryManager:
                         GROUP BY t.thread_id
                         ORDER BY t.is_pinned DESC, t.updated_at DESC
                         """,
-                        (uid, like_term, like_term),
+                        (uid, 1 if include_archived else 0, like_term, like_term),
                     ).fetchall()
                 else:
                     rows = self._conn.execute(
                         """
                         SELECT t.thread_id, t.title, t.chat_mode, t.is_pinned,
+                               COALESCE(t.is_archived, 0) AS is_archived,
                                t.created_at, t.updated_at,
                                COUNT(m.id) AS message_count
                         FROM threads t
                         LEFT JOIN thread_messages m
                           ON m.thread_id = t.thread_id AND m.user_id = t.user_id
                         WHERE t.user_id = ?
+                          AND (? OR (t.is_archived = 0 OR t.is_archived IS NULL))
                         GROUP BY t.thread_id
                         ORDER BY t.is_pinned DESC, t.updated_at DESC
                         """,
-                        (uid,),
+                        (uid, 1 if include_archived else 0),
                     ).fetchall()
 
                 now_ts = time.time()
@@ -415,6 +442,7 @@ class ConversationMemoryManager:
                         "title": row["title"],
                         "chat_mode": row["chat_mode"],
                         "is_pinned": bool(row["is_pinned"]),
+                        "is_archived": bool(row["is_archived"]),
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
                         "message_count": row["message_count"],

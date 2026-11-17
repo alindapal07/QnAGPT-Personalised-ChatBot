@@ -80,6 +80,51 @@ class TestSessionService(unittest.TestCase):
         self.assertEqual(state["current_chat_id"], "restored-1")
         self.assertEqual(state["messages"], [{"role": "user", "content": "Past question"}])
 
+    def test_derive_chat_title_multimodal_list_content(self) -> None:
+        from qna_bot.services.session_service import _derive_chat_title
+
+        # Multimodal message with text and image
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analyze the financial charts in this image"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+                ],
+            }
+        ]
+        title = _derive_chat_title(msgs)
+        self.assertIsInstance(title, str)
+        self.assertEqual(title, "Analyze the financial charts in this image")
+
+        # Multimodal message with image only (no text part)
+        img_only = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+                ],
+            }
+        ]
+        self.assertEqual(_derive_chat_title(img_only), "Image Analysis")
+
+        # Multimodal message with empty content list
+        empty_list = [{"role": "user", "content": []}]
+        self.assertEqual(_derive_chat_title(empty_list), "Conversation")
+
+        # Unknown block types with no text and no image
+        unknown_blocks = [{"role": "user", "content": [{"type": "custom", "payload": 123}]}]
+        self.assertEqual(_derive_chat_title(unknown_blocks), "Conversation")
+
+    def test_derive_chat_title_empty_and_whitespace_fallback(self) -> None:
+        from qna_bot.services.session_service import _derive_chat_title
+
+        self.assertEqual(_derive_chat_title([]), "Conversation")
+        self.assertEqual(_derive_chat_title([{"role": "user", "content": "   \n\t  "}]), "Conversation")
+        self.assertEqual(_derive_chat_title([{"role": "assistant", "content": "Hi"}]), "Conversation")
+        self.assertEqual(_derive_chat_title([{"role": "user", "content": "Multi\nLine\tTitle"}]), "Multi Line Title")
+
+
 
 if __name__ == "__main__":
     unittest.main()

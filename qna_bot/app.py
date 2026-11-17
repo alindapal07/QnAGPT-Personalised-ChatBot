@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import base64
+from contextlib import nullcontext
 import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -22,11 +23,12 @@ from qna_bot.agent.approval import ApprovalManager  # noqa: E402
 from qna_bot.agent.memory import ConversationMemoryManager  # noqa: E402
 from qna_bot.config.settings import AppSettings, get_settings  # noqa: E402
 from qna_bot.core.logging_config import configure_logging, get_logger  # noqa: E402
+from qna_bot.core.security import SlidingWindowRateLimiter  # noqa: E402
 from qna_bot.database.connection import DatabaseManager  # noqa: E402
 from qna_bot.database.legacy_migration import ensure_legacy_workspace_synced  # noqa: E402
 from qna_bot.database.session import SQLAlchemyDatabase  # noqa: E402
-from qna_bot.mcp.client_manager import MCPClientManager  # noqa: E402
-from qna_bot.mcp.registry.service import MCPRegistryService  # noqa: E402
+from qna_bot.mcp_client.client_manager import MCPClientManager  # noqa: E402
+from qna_bot.mcp_client.registry.service import MCPRegistryService  # noqa: E402
 from qna_bot.rag.qdrant_store import QdrantVectorStoreManager  # noqa: E402
 from qna_bot.services.agent_service import AIAgent  # noqa: E402
 from qna_bot.services.approval_service import ApprovalService  # noqa: E402
@@ -66,7 +68,8 @@ from qna_bot.ui import (  # noqa: E402
     render_user_message,
     render_welcome_screen,
 )
-from qna_bot.ui.design_system import render_html  # noqa: E402
+from qna_bot.ui.design_system import ASSISTANT_BADGE_SVG, render_execution_timeline_html, render_html  # noqa: E402
+from qna_bot.ui.router import dispatch_workspace_page  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -151,6 +154,16 @@ def _get_shared_registry_service(
     return MCPRegistryService(db_manager=db, settings=custom_cfg)
 
 
+@st.cache_resource
+def _get_shared_rate_limiter(
+    max_attempts: int = 5,
+    window_sec: float = 300.0,
+    version: int = 2,
+) -> SlidingWindowRateLimiter:
+    """Return process-wide singleton SlidingWindowRateLimiter persistent across Streamlit reruns."""
+    return SlidingWindowRateLimiter(max_attempts=int(max_attempts), window_sec=float(window_sec))
+
+
 def build_platform_services(
     settings: AppSettings,
 ) -> tuple[SQLAlchemyDatabase, LocalStorageProvider, QdrantVectorStoreManager, AuthService, UserService]:
@@ -164,7 +177,13 @@ def build_platform_services(
         settings.qdrant_collection,
         settings.embedding_model_name,
     )
-    auth_svc = AuthService(db=orm_db, settings=settings)
+    max_attempts = int(getattr(settings, "auth_rate_limit_max_attempts", 5))
+    window_sec = float(getattr(settings, "auth_rate_limit_window_sec", 300.0))
+    rate_limiter = _get_shared_rate_limiter(
+        max_attempts=max_attempts,
+        window_sec=window_sec,
+    )
+    auth_svc = AuthService(db=orm_db, settings=settings, rate_limiter=rate_limiter)
     user_svc = UserService(db=orm_db, storage=storage, vector_store=vector_store)
     return orm_db, storage, vector_store, auth_svc, user_svc
 
@@ -340,88 +359,70 @@ def execute_ai_turn(
     extra_sources: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> None:
     """Execute multimodal vision turn or LangGraph Agentic RAG + MCP turn."""
-    col_ai, _ = st.columns([9, 1])
-    with col_ai:
-        st.markdown('<div class="msg-label-ai">QnAGPT</div>', unsafe_allow_html=True)
-        with st.chat_message("assistant"):
-            try:
-                if has_image or chat_service is None or sidebar_cfg is None:
-                    if has_image and sidebar_cfg is not None and sidebar_cfg.text_model != sidebar_cfg.vision_model:
-                        st.caption(
-                            f"Routing image attachment to vision-capable model `{sidebar_cfg.vision_model}`."
+    render_html(
+        f'<div class="chat-turn-header" style="margin-left:2px;margin-bottom:6px;">'
+        f'<span class="chat-ai-name" style="font-size:13px;font-weight:700;color:#202333;">QnAGPT</span>'
+        f'{ASSISTANT_BADGE_SVG}'
+        f'</div>'
+    )
+    turn_ctx = st.container() if callable(getattr(st, "container", None)) else (st.chat_message("assistant") if callable(getattr(st, "chat_message", None)) else nullcontext())
+    with turn_ctx:
+        try:
+            if has_image or chat_service is None or sidebar_cfg is None:
+                if has_image and sidebar_cfg is not None and sidebar_cfg.text_model != sidebar_cfg.vision_model:
+                    st.caption(
+                        f"Routing image attachment to vision-capable model `{sidebar_cfg.vision_model}`."
+                    )
+                with st.spinner("Analyzing..."):
+                    stream_gen = agent.stream(st.session_state.messages, has_image=has_image)
+                    answer = st.write_stream(stream_gen)
+                if answer:
+                    ai_msg = {
+                        "role": "assistant",
+                        "content": answer,
+                        "sources": list(extra_sources or []),
+                        "web_sources": [],
+                        "tool_events": [],
+                        "timestamp": time.time(),
+                    }
+                    st.session_state.messages.append(ai_msg)
+                    if chat_service is not None and sidebar_cfg is not None:
+                        chat_service.persist_message(
+                            thread_id=st.session_state.current_chat_id,
+                            user_id=sidebar_cfg.user_id,
+                            message=ai_msg,
+                            chat_mode=sidebar_cfg.chat_mode,
                         )
-                    with st.spinner("Analyzing..."):
-                        stream_gen = agent.stream(st.session_state.messages, has_image=has_image)
-                        answer = st.write_stream(stream_gen)
-                    if answer:
-                        ai_msg = {
-                            "role": "assistant",
-                            "content": answer,
-                            "sources": list(extra_sources or []),
-                            "web_sources": [],
-                            "tool_events": [],
-                            "timestamp": time.time(),
-                        }
-                        st.session_state.messages.append(ai_msg)
-                        if chat_service is not None and sidebar_cfg is not None:
-                            chat_service.persist_message(
-                                thread_id=st.session_state.current_chat_id,
-                                user_id=sidebar_cfg.user_id,
-                                message=ai_msg,
-                                chat_mode=sidebar_cfg.chat_mode,
-                            )
-                    return
+                return
 
-                last_user = next(
-                    (m for m in reversed(st.session_state.messages) if m.get("role") == "user"),
-                    None,
-                )
-                query_text = override_query or str(last_user.get("content", "") if last_user else "")
-                max_iter = int(st.session_state.get("cfg_max_iterations", 10))
-                has_status_widget = callable(getattr(st, "status", None)) and callable(getattr(st, "empty", None))
+            last_user = next(
+                (m for m in reversed(st.session_state.messages) if m.get("role") == "user"),
+                None,
+            )
+            query_text = override_query or str(last_user.get("content", "") if last_user else "")
+            max_iter = int(st.session_state.get("cfg_max_iterations", 10))
+            has_status_widget = callable(getattr(st, "status", None)) and callable(getattr(st, "empty", None))
 
-                if has_status_widget:
-                    with st.status("Processing request...", expanded=True) as status_ui:
-                        timeline_slot = st.empty()
+            if has_status_widget:
+                with st.status("Processing request...", expanded=True) as status_ui:
+                    timeline_slot = st.empty()
+                    render_html(
+                        render_execution_timeline_html(
+                            [{"label": "Understanding request", "detail": "", "state": "in_progress"}]
+                        ),
+                        target=timeline_slot,
+                    )
+
+                    def _on_stage(ev: Dict[str, Any]) -> None:
+                        trace = list(ev.get("trace") or [])
+                        cur = ev.get("stage") or {}
+                        lbl = str(cur.get("label") or "Processing...")
+                        status_ui.update(label=lbl)
                         render_html(
-                            render_execution_timeline_html(
-                                [{"label": "Understanding request", "detail": "", "state": "in_progress"}]
-                            ),
+                            render_execution_timeline_html(trace),
                             target=timeline_slot,
                         )
 
-                        def _on_stage(ev: Dict[str, Any]) -> None:
-                            trace = list(ev.get("trace") or [])
-                            cur = ev.get("stage") or {}
-                            lbl = str(cur.get("label") or "Processing...")
-                            status_ui.update(label=lbl)
-                            render_html(
-                                render_execution_timeline_html(trace),
-                                target=timeline_slot,
-                            )
-
-                        result = chat_service.run_agentic_turn(
-                            user_query=query_text,
-                            thread_id=st.session_state.current_chat_id,
-                            user_id=sidebar_cfg.user_id,
-                            chat_mode=sidebar_cfg.chat_mode,
-                            model_name=sidebar_cfg.text_model,
-                            temperature=sidebar_cfg.temperature,
-                            max_tokens=sidebar_cfg.max_tokens,
-                            system_prompt=sidebar_cfg.system_prompt,
-                            on_event=_on_stage,
-                            max_iterations=max_iter,
-                        )
-                        total_s = result.execution_trace[-1]["elapsed_s"] if result.execution_trace else 0.0
-                        final_state = "error" if result.error and not result.answer else "complete"
-                        status_ui.update(
-                            label=f"Completed ({len(result.execution_trace)} stages · {total_s:.1f}s)",
-                            state=final_state,
-                            expanded=False,
-                        )
-                else:
-                    status_box = st.empty()
-                    status_box.caption("Understanding your request...")
                     result = chat_service.run_agentic_turn(
                         user_query=query_text,
                         thread_id=st.session_state.current_chat_id,
@@ -431,22 +432,44 @@ def execute_ai_turn(
                         temperature=sidebar_cfg.temperature,
                         max_tokens=sidebar_cfg.max_tokens,
                         system_prompt=sidebar_cfg.system_prompt,
-                        on_activity=lambda msg: status_box.caption(msg),
+                        on_event=_on_stage,
                         max_iterations=max_iter,
                     )
-                    status_box.empty()
-
-                _finalize_turn_output(
-                    result,
-                    chat_service=chat_service,
-                    sidebar_cfg=sidebar_cfg,
-                    extra_sources=extra_sources,
+                    total_s = result.execution_trace[-1]["elapsed_s"] if result.execution_trace else 0.0
+                    final_state = "error" if result.error and not result.answer else "complete"
+                    status_ui.update(
+                        label=f"Completed ({len(result.execution_trace)} stages · {total_s:.1f}s)",
+                        state=final_state,
+                        expanded=False,
+                    )
+            else:
+                status_box = st.empty()
+                status_box.caption("Understanding your request...")
+                result = chat_service.run_agentic_turn(
+                    user_query=query_text,
+                    thread_id=st.session_state.current_chat_id,
+                    user_id=sidebar_cfg.user_id,
+                    chat_mode=sidebar_cfg.chat_mode,
+                    model_name=sidebar_cfg.text_model,
+                    temperature=sidebar_cfg.temperature,
+                    max_tokens=sidebar_cfg.max_tokens,
+                    system_prompt=sidebar_cfg.system_prompt,
+                    on_activity=lambda msg: status_box.caption(msg),
+                    max_iterations=max_iter,
                 )
-            except Exception as exc:
-                logger.error("Failed to execute AI turn: %s", exc)
-                st.error("Something went wrong while contacting the model.")
-                with st.expander("Details"):
-                    st.code(str(exc))
+                status_box.empty()
+
+            _finalize_turn_output(
+                result,
+                chat_service=chat_service,
+                sidebar_cfg=sidebar_cfg,
+                extra_sources=extra_sources,
+            )
+        except Exception as exc:
+            logger.error("Failed to execute AI turn: %s", exc)
+            st.error("Something went wrong while contacting the model.")
+            with st.expander("Details"):
+                st.code(str(exc))
 
 
 def handle_approval_decision(
@@ -456,37 +479,32 @@ def handle_approval_decision(
     sidebar_cfg: SidebarConfig,
 ) -> None:
     """Resume a paused LangGraph execution after user Approve/Reject action."""
-    col_ai, _ = st.columns([11, 1])
-    with col_ai:
-        with st.chat_message("assistant"):
-            try:
-                if callable(getattr(st, "status", None)) and callable(getattr(st, "empty", None)):
-                    with st.status(
-                        "Executing approved action..." if approved else "Canceling rejected action...",
-                        expanded=True,
-                    ) as status_ui:
-                        timeline_slot = st.empty()
+    render_html(
+        f'<div class="chat-turn-header" style="margin-left:2px;margin-bottom:6px;">'
+        f'<span class="chat-ai-name" style="font-size:13px;font-weight:700;color:#202333;">QnAGPT</span>'
+        f'{ASSISTANT_BADGE_SVG}'
+        f'</div>'
+    )
+    turn_ctx = st.container() if callable(getattr(st, "container", None)) else (st.chat_message("assistant") if callable(getattr(st, "chat_message", None)) else nullcontext())
+    with turn_ctx:
+        try:
+            if callable(getattr(st, "status", None)) and callable(getattr(st, "empty", None)):
+                with st.status(
+                    "Executing approved action..." if approved else "Canceling rejected action...",
+                    expanded=True,
+                ) as status_ui:
+                    timeline_slot = st.empty()
 
-                        def _on_resume_stage(ev: Dict[str, Any]) -> None:
-                            timeline_slot.markdown(
-                                render_execution_timeline_html(ev.get("trace") or []),
-                                unsafe_allow_html=True,
-                            )
-
-                        result = chat_service.resume_approval(
-                            thread_id=st.session_state.current_chat_id,
-                            user_id=sidebar_cfg.user_id,
-                            approval_id=approval_id,
-                            approved=approved,
-                            model_name=sidebar_cfg.text_model,
-                            temperature=sidebar_cfg.temperature,
-                            max_tokens=sidebar_cfg.max_tokens,
-                            on_event=_on_resume_stage,
+                    def _on_resume_stage(ev: Dict[str, Any]) -> None:
+                        trace = list(ev.get("trace") or [])
+                        cur = ev.get("stage") or {}
+                        lbl = str(cur.get("label") or ("Executing approved action..." if approved else "Canceling rejected action..."))
+                        status_ui.update(label=lbl)
+                        render_html(
+                            render_execution_timeline_html(trace),
+                            target=timeline_slot,
                         )
-                        status_ui.update(label="Completed", state="complete", expanded=False)
-                else:
-                    status_box = st.empty()
-                    status_box.caption("Resuming approved action..." if approved else "Canceling rejected action...")
+
                     result = chat_service.resume_approval(
                         thread_id=st.session_state.current_chat_id,
                         user_id=sidebar_cfg.user_id,
@@ -495,15 +513,29 @@ def handle_approval_decision(
                         model_name=sidebar_cfg.text_model,
                         temperature=sidebar_cfg.temperature,
                         max_tokens=sidebar_cfg.max_tokens,
-                        on_activity=lambda msg: status_box.caption(msg),
+                        on_event=_on_resume_stage,
                     )
-                    status_box.empty()
-                _finalize_turn_output(
-                    result,
-                    chat_service=chat_service,
-                    sidebar_cfg=sidebar_cfg,
+                    status_ui.update(label="Action Completed", state="complete", expanded=False)
+            else:
+                status_box = st.empty()
+                status_box.caption("Resuming approved action..." if approved else "Canceling rejected action...")
+                result = chat_service.resume_approval(
+                    thread_id=st.session_state.current_chat_id,
+                    user_id=sidebar_cfg.user_id,
+                    approval_id=approval_id,
+                    approved=approved,
+                    model_name=sidebar_cfg.text_model,
+                    temperature=sidebar_cfg.temperature,
+                    max_tokens=sidebar_cfg.max_tokens,
+                    on_activity=lambda msg: status_box.caption(msg),
                 )
-            except Exception as exc:
+                status_box.empty()
+            _finalize_turn_output(
+                result,
+                chat_service=chat_service,
+                sidebar_cfg=sidebar_cfg,
+            )
+        except Exception as exc:
                 st.session_state.pending_approval = None
                 st.error(f"Failed resuming workflow: {exc}")
     st.rerun()
@@ -644,6 +676,8 @@ def submit_user_message(
         image_mime=img_mime or "image/png",
         images=img_list,
         attached_docs=doc_names,
+        index=len(st.session_state.messages),
+        allow_edit=False,
     )
     execute_ai_turn(
         agent,
@@ -673,6 +707,7 @@ def _clear_authenticated_client_state() -> None:
 def main() -> None:
     """Run the QnAGPT Production Multi-User Agentic AI Workspace."""
     settings = get_settings()
+    settings.validate_production_secrets()
     configure_logging(settings.log_level)
     configure_page(settings)
 
@@ -710,51 +745,22 @@ def main() -> None:
     agent = create_agent(sidebar_cfg, settings)
 
     page = sidebar_cfg.active_page
-    if page == "Agent Workspace":
-        render_agent_workspace_page(
-            user_id=sidebar_cfg.user_id,
-            mcp_service=mcp_svc,
-            document_service=doc_svc,
-            approval_service=appr_svc,
-            on_approval_decision=lambda aid, ok: handle_approval_decision(aid, ok, chat_svc, sidebar_cfg),
-        )
-        return
-
-    if page == "Knowledge Base":
-        render_knowledge_base_page(settings, sidebar_cfg.user_id, doc_svc)
-        return
-
-    if page == "MCP Marketplace":
-        render_mcp_marketplace_page(settings, sidebar_cfg.user_id, mcp_svc)
-        return
-
-    if page == "MCP Servers":
-        render_mcp_dashboard(sidebar_cfg.user_id, mcp_svc)
-        return
-
-    if page == "Tool Marketplace":
-        render_tool_marketplace_page(sidebar_cfg.user_id, mcp_svc)
-        return
-
-    if page == "Account":
-        render_account_page(
-            settings=settings,
-            auth_session=auth_session,
-            auth_service=auth_svc,
-            user_service=user_svc,
-            vector_store=vector_store,
-            on_signed_out=_clear_authenticated_client_state,
-        )
-        return
-
-    if page == "Settings":
-        render_settings_page(
-            settings=settings,
-            user_id=sidebar_cfg.user_id,
-            on_clear_chat=lambda: on_clear_chat(chat_svc),
-            user_service=user_svc,
-            document_service=doc_svc,
-        )
+    if dispatch_workspace_page(
+        page=page,
+        settings=settings,
+        sidebar_cfg=sidebar_cfg,
+        auth_session=auth_session,
+        auth_svc=auth_svc,
+        user_svc=user_svc,
+        chat_svc=chat_svc,
+        doc_svc=doc_svc,
+        mcp_svc=mcp_svc,
+        appr_svc=appr_svc,
+        vector_store=vector_store,
+        on_signed_out=_clear_authenticated_client_state,
+        on_clear_chat=lambda: on_clear_chat(chat_svc),
+        handle_approval_decision=handle_approval_decision,
+    ):
         return
 
     # ── Chat Page Header + Conversation Canvas ───────────────────────────────

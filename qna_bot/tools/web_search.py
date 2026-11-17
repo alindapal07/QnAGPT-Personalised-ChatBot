@@ -18,8 +18,8 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from qna_bot.core.logging_config import get_logger
-from qna_bot.mcp.exceptions import MCPSecurityError
-from qna_bot.mcp.security import sanitize_tool_output, validate_remote_url
+from qna_bot.mcp_client.exceptions import MCPSecurityError
+from qna_bot.mcp_client.security import sanitize_tool_output, validate_remote_url
 
 logger = get_logger(__name__)
 

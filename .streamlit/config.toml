@@ -1,3 +1,46 @@
+# =============================================================================
+# Streamlit Production Security & Theme Configuration
+# Project: QnAGPT-Personalised-ChatBot
+# =============================================================================
+
+[server]
+# Enable Streamlit's built-in XSRF protection for WebSocket and HTTP upload endpoints
+enableXsrfProtection = true
+
+# Enable CORS protection to strictly restrict cross-origin browser requests
+# (In modern Streamlit, enableCORS=true enforces origin checks and blocks wildcard '*')
+enableCORS = true
+corsAllowedOrigins = ["http://localhost:8501", "http://127.0.0.1:8501"]
+
+# Restrict WebSocket connection hostnames
+allowedHosts = ["localhost", "127.0.0.1"]
+
+# Default network binding: bind strictly to loopback (127.0.0.1) for local security.
+# For containerized / cloud deployments (Docker/K8s/Cloud Run), override via:
+# STREAMLIT_SERVER_ADDRESS=0.0.0.0 or command-line flag --server.address 0.0.0.0
+address = "127.0.0.1"
+port = 8501
+
+# Headless execution mode suitable for background services and container runtimes
+headless = true
+
+# Align server upload ceiling with the application's 20MB RAG document limit (+ 5MB headroom)
+maxUploadSize = 25
+
+# Max WebSocket message payload in MB
+maxMessageSize = 50
+
+# Strict SameSite policy for XSRF protection cookie
+xsrfCookieSameSite = "lax"
+
+[browser]
+# Disable telemetry and usage statistics collection to protect user privacy
+gatherUsageStats = false
+
+[client]
+# Minimal toolbar mode to reduce surface area exposure
+toolbarMode = "minimal"
+
 [theme]
 base = "light"
 primaryColor = "#315EAB"

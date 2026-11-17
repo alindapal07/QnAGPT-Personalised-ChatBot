@@ -4,9 +4,11 @@ from pathlib import Path
 import socket
 from unittest.mock import MagicMock, patch
 
+import pytest
 from ddgs.exceptions import DDGSException
 
 from qna_bot.config.settings import AppSettings
+from qna_bot.mcp_client.security import MCPSecurityError, validate_remote_url
 from qna_bot.rag.ingestion import DocumentIngestor
 from qna_bot.rag.retriever import DocumentRetriever
 from qna_bot.rag.vector_store import FAISSVectorStoreManager
@@ -140,7 +142,7 @@ def test_web_search_ddgs_exception_fallback_and_open_web_page_ssrf(tmp_path: Pat
     open_tool = build_open_web_page_tool(searcher=searcher, reader=SafeWebPageReader())
     with (
         patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
         ),
         patch("qna_bot.tools.web_search.httpx.Client", return_value=mock_client),
@@ -158,7 +160,7 @@ def test_web_search_ddgs_exception_fallback_and_open_web_page_ssrf(tmp_path: Pat
     mock_client.get.return_value = redirect_resp
     with (
         patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             side_effect=[
                 [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
                 [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))],
@@ -300,5 +302,100 @@ def test_webpage_table_extraction_hydration_fallback_and_cross_source_verificati
     assert set(by_name["Sarvam AI"]["founders"]) == {"Vivek Raghavan", "Pratyush Kumar"}
     assert len(verified["conflicts"]) == 1
     assert by_name["Unverified Startup"]["funding_amount"] is None
+
+
+def test_document_tools_empty_knowledge_base_returns_clean_message(tmp_path: Path) -> None:
+    settings = AppSettings(groq_api_key="", vector_store_dir=tmp_path / "vs")
+    store = FAISSVectorStoreManager(
+        base_dir=settings.vector_store_dir,
+        embeddings=DeterministicTestEmbeddings(),
+    )
+    retriever = DocumentRetriever(vector_store=store, settings=settings)
+    charlie_search, charlie_summary = build_document_tools(retriever, user_id="charlie_empty")
+
+    search_out = charlie_search.invoke({"query": "quantum computing", "top_k": 4})
+    assert isinstance(search_out, str)
+    assert "No relevant uploaded documents" in search_out or "No indexed documents" in search_out or len(search_out) > 0
+
+    summary_out = charlie_summary.invoke({"topic": "anything"})
+    assert isinstance(summary_out, str)
+
+
+def test_open_web_page_blocks_cloud_metadata_and_private_ips() -> None:
+    reader = SafeWebPageReader()
+    tool = build_open_web_page_tool(reader)
+
+    # AWS/GCP/Azure instance metadata IP
+    meta_out = tool.invoke({"url": "http://169.254.169.254/latest/meta-data/"})
+    assert "blocked" in meta_out.lower() or "error" in meta_out.lower() or "ssrf" in meta_out.lower()
+
+    # Loopback IP
+    loopback_out = tool.invoke({"url": "http://127.0.0.1:8080/admin"})
+    assert "blocked" in loopback_out.lower() or "error" in loopback_out.lower() or "ssrf" in loopback_out.lower()
+
+
+def test_validate_remote_url_disallowed_schemes_and_credentials() -> None:
+    """Disallowed schemes and embedded user credentials must be rejected by SSRF guard."""
+    with pytest.raises(MCPSecurityError, match="Unsupported URL scheme"):
+        validate_remote_url("ftp://ftp.example.com/file.txt")
+
+    with pytest.raises(MCPSecurityError, match="Unsupported URL scheme"):
+        validate_remote_url("gopher://gopher.example.com:70/")
+
+    with pytest.raises(MCPSecurityError, match="Unsupported URL scheme"):
+        validate_remote_url("file:///etc/passwd")
+
+    with pytest.raises(MCPSecurityError, match="user credentials"):
+        validate_remote_url("https://admin:secret@example.com/api")
+
+    with pytest.raises(MCPSecurityError, match="user credentials"):
+        validate_remote_url("https://user@example.com/dashboard")
+
+
+def test_validate_remote_url_cgnat_benchmarking_and_ipv4_mapped_ipv6() -> None:
+    """Special disallowed IP ranges (CGNAT RFC 6598, Benchmarking RFC 2544, IPv4-mapped IPv6) must be blocked."""
+    # CGNAT 100.64.0.0/10
+    with pytest.raises(MCPSecurityError, match="Blocked private/loopback IP"):
+        validate_remote_url("http://100.64.0.1:8080/api", allow_insecure_http=True)
+
+    # Benchmarking 198.18.0.0/15
+    with pytest.raises(MCPSecurityError, match="Blocked private/loopback IP"):
+        validate_remote_url("http://198.18.0.1/benchmark", allow_insecure_http=True)
+
+    # TEST-NET-1 192.0.2.0/24
+    with pytest.raises(MCPSecurityError, match="Blocked private/loopback IP"):
+        validate_remote_url("http://192.0.2.1/test", allow_insecure_http=True)
+
+    # IPv4-mapped IPv6 ::ffff:127.0.0.1
+    with pytest.raises(MCPSecurityError, match="Blocked private/loopback IP"):
+        validate_remote_url("http://[::ffff:127.0.0.1]:8080/admin", allow_insecure_http=True)
+
+    # IPv4-mapped IPv6 ::ffff:10.0.0.1
+    with pytest.raises(MCPSecurityError, match="Blocked private/loopback IP"):
+        validate_remote_url("http://[::ffff:10.0.0.1]:8080/admin", allow_insecure_http=True)
+
+
+def test_safe_web_page_reader_dns_rebinding_and_redirect_ssrf() -> None:
+    """SafeWebPageReader must block DNS resolution to private IPs and redirects to disallowed ranges."""
+    reader = SafeWebPageReader()
+    tool = build_open_web_page_tool(reader)
+
+    # Public domain that resolves via DNS to a private IP (DNS rebinding simulation)
+    with patch(
+        "qna_bot.mcp_client.security.socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    ):
+        out = tool.invoke({"url": "https://malicious-dns-rebind.com/api"})
+        assert "blocked" in out.lower() or "error" in out.lower()
+
+    # Public domain that resolves via DNS to CGNAT IP (100.64.1.1)
+    with patch(
+        "qna_bot.mcp_client.security.socket.getaddrinfo",
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("100.64.1.1", 443))],
+    ):
+        out_cgnat = tool.invoke({"url": "https://cgnat-target.internal/api"})
+        assert "blocked" in out_cgnat.lower() or "error" in out_cgnat.lower()
+
+
 
 

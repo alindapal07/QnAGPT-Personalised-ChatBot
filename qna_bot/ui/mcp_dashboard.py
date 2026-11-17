@@ -6,7 +6,7 @@ import time
 
 import streamlit as st
 
-from qna_bot.mcp.exceptions import MCPError
+from qna_bot.mcp_client.exceptions import MCPError
 from qna_bot.services.mcp_service import MCPService
 from qna_bot.ui.design_system import (
     render_empty_state,
@@ -68,102 +68,158 @@ def render_mcp_dashboard(user_id: str, mcp_service: MCPService) -> None:
 
     # ── Add Server Form ───────────────────────────────────────────────────────
     with st.expander("Add Custom MCP Server", icon=":material/add:", expanded=(total_srv == 0)):
-        srv_name = st.text_input("Server Name", placeholder="e.g. filesystem or github")
-        transport = st.selectbox(
-            "Transport Type",
-            options=["stdio", "streamable_http", "sse"],
-            format_func=lambda x: {
-                "stdio": "Local STDIO",
-                "streamable_http": "Remote Streamable HTTP",
-                "sse": "Legacy SSE (Compatibility)",
-            }[x],
-        )
+        tab_form, tab_json = st.tabs(["Manual Form", "Import from Claude Desktop JSON"])
 
-        command = args_raw = env_raw = roots_raw = ""
-        url = auth_header = auth_env_var = secret_input = ""
-        auth_type = "none"
-        allow_insecure = allow_private = False
+        with tab_form:
+            srv_name = st.text_input("Server Name", placeholder="e.g. filesystem or manim-server")
+            transport = st.selectbox(
+                "Transport Type",
+                options=["stdio", "streamable_http", "sse"],
+                format_func=lambda x: {
+                    "stdio": "Local STDIO",
+                    "streamable_http": "Remote Streamable HTTP",
+                    "sse": "Legacy SSE (Compatibility)",
+                }[x],
+            )
 
-        if transport == "stdio":
-            command = st.text_input(
-                "Command (allowlisted: python, uv, uvx, node, npx, docker)",
-                placeholder="npx",
-            )
-            args_raw = st.text_input(
-                "Arguments (comma or newline separated)",
-                placeholder="-y, @modelcontextprotocol/server-filesystem, C:/path/to/folder",
-            )
-            roots_raw = st.text_input(
-                "Allowed Filesystem Roots (optional, comma-separated)",
-                placeholder="C:/Users/example/Documents",
-            )
-            env_raw = st.text_area(
-                "Environment Variable References (KEY=env:VAR_NAME, one per line)",
-                placeholder="GITHUB_TOKEN=env:MY_GITHUB_TOKEN",
-                height=70,
-            )
-        else:
-            url = st.text_input("Remote MCP Server URL", placeholder="https://example.com/mcp")
-            auth_type = st.selectbox(
-                "Authentication Method",
-                options=["none", "bearer_token", "api_key", "oauth", "bearer_env", "api_key_env"],
-            )
-            if auth_type in ("bearer_token", "api_key"):
-                auth_header = st.text_input(
-                    "Header Name",
-                    value="X-API-Key" if auth_type == "api_key" else "Authorization",
-                )
-                secret_input = st.text_input(
-                    "Credential Value (encrypted with Fernet at rest)",
-                    type="password",
-                    placeholder="Paste token or API key...",
-                )
-            elif auth_type != "none":
-                auth_header = st.text_input("Header Name", value="Authorization")
-                auth_env_var = st.text_input(
-                    "Token Environment Variable Name",
-                    placeholder="MCP_SERVER_TOKEN",
-                )
-            c_sec1, c_sec2 = st.columns(2)
-            with c_sec1:
-                allow_insecure = st.checkbox("Allow HTTP (non-TLS)", value=False)
-            with c_sec2:
-                allow_private = st.checkbox("Allow local/private network (controlled policy)", value=False)
+            command = args_raw = env_raw = roots_raw = ""
+            url = auth_header = auth_env_var = secret_input = ""
+            auth_type = "none"
+            allow_insecure = allow_private = False
 
-        enabled = st.checkbox("Enabled", value=True)
-        if st.button("Register MCP Server", type="primary", key="btn_register_mcp"):
-            parsed_args = [
-                part.strip()
-                for line in args_raw.splitlines()
-                for part in line.split(",")
-                if part.strip()
-            ]
-            parsed_roots = [r.strip() for r in roots_raw.split(",") if r.strip()]
-            try:
-                rec = mcp_service.register_server(
-                    user_id=user_id,
-                    name=srv_name,
-                    transport=transport,
-                    enabled=enabled,
-                    command=command,
-                    args=parsed_args,
-                    env_refs=_parse_kv_lines(env_raw),
-                    url=url,
-                    auth_type=auth_type,
-                    auth_header_name=auth_header,
-                    auth_env_var=auth_env_var,
-                    allow_insecure_http=allow_insecure,
-                    allow_private_network=allow_private,
-                    allowed_roots=parsed_roots,
+            if transport == "stdio":
+                command = st.text_input(
+                    "Command (allowlisted: python, uv, uvx, node, npx, docker)",
+                    placeholder="python",
                 )
-                if auth_type == "bearer_token" and secret_input.strip():
-                    mcp_service.store_bearer_token(user_id, rec.server_id, secret_input, header_name=auth_header)
-                elif auth_type == "api_key" and secret_input.strip():
-                    mcp_service.store_api_key(user_id, rec.server_id, secret_input, header_name=auth_header)
-                st.success(f"Registered MCP server '{rec.name}'.")
-                st.rerun()
-            except MCPError as exc:
-                st.error(f"Configuration validation failed: {exc}")
+                args_raw = st.text_input(
+                    "Arguments (comma-separated, newline-separated, or JSON array)",
+                    placeholder="C:/path/to/server.py",
+                )
+                roots_raw = st.text_input(
+                    "Allowed Filesystem Roots (optional, comma-separated)",
+                    placeholder="C:/Users/example/Documents",
+                )
+                env_raw = st.text_area(
+                    "Environment Variables (KEY=VALUE or KEY=env:VAR_NAME, one per line)",
+                    placeholder="MANIM_EXECUTABLE=C:/path/to/manim.exe",
+                    height=70,
+                )
+            else:
+                url = st.text_input("Remote MCP Server URL", placeholder="https://example.com/mcp")
+                auth_type = st.selectbox(
+                    "Authentication Method",
+                    options=["none", "bearer_token", "api_key", "oauth", "bearer_env", "api_key_env"],
+                )
+                if auth_type in ("bearer_token", "api_key"):
+                    auth_header = st.text_input(
+                        "Header Name",
+                        value="X-API-Key" if auth_type == "api_key" else "Authorization",
+                    )
+                    secret_input = st.text_input(
+                        "Credential Value (encrypted with Fernet at rest)",
+                        type="password",
+                        placeholder="Paste token or API key...",
+                    )
+                elif auth_type != "none":
+                    auth_header = st.text_input("Header Name", value="Authorization")
+                    auth_env_var = st.text_input(
+                        "Token Environment Variable Name",
+                        placeholder="MCP_SERVER_TOKEN",
+                    )
+                c_sec1, c_sec2 = st.columns(2)
+                with c_sec1:
+                    allow_insecure = st.checkbox("Allow HTTP (non-TLS)", value=False)
+                with c_sec2:
+                    allow_private = st.checkbox("Allow local/private network (controlled policy)", value=False)
+
+            enabled = st.checkbox("Enabled", value=True)
+            if st.button("Register MCP Server", type="primary", key="btn_register_mcp"):
+                parsed_args = []
+                stripped_args = args_raw.strip()
+                if stripped_args.startswith("[") and stripped_args.endswith("]"):
+                    try:
+                        loaded = json.loads(stripped_args)
+                        if isinstance(loaded, list):
+                            parsed_args = [str(x).strip() for x in loaded if str(x).strip()]
+                    except Exception:
+                        pass
+                if not parsed_args and stripped_args:
+                    parsed_args = [
+                        part.strip()
+                        for line in args_raw.splitlines()
+                        for part in (line.split(",") if "," in line else [line])
+                        if part.strip()
+                    ]
+                parsed_roots = [r.strip() for r in roots_raw.split(",") if r.strip()]
+                try:
+                    rec = mcp_service.register_server(
+                        user_id=user_id,
+                        name=srv_name,
+                        transport=transport,
+                        enabled=enabled,
+                        command=command,
+                        args=parsed_args,
+                        env_refs=_parse_kv_lines(env_raw),
+                        url=url,
+                        auth_type=auth_type,
+                        auth_header_name=auth_header,
+                        auth_env_var=auth_env_var,
+                        allow_insecure_http=allow_insecure,
+                        allow_private_network=allow_private,
+                        allowed_roots=parsed_roots,
+                    )
+                    if auth_type == "bearer_token" and secret_input.strip():
+                        mcp_service.store_bearer_token(user_id, rec.server_id, secret_input, header_name=auth_header)
+                    elif auth_type == "api_key" and secret_input.strip():
+                        mcp_service.store_api_key(user_id, rec.server_id, secret_input, header_name=auth_header)
+                    st.success(f"Registered MCP server '{rec.name}'.")
+                    st.rerun()
+                except MCPError as exc:
+                    st.error(f"Configuration validation failed: {exc}")
+
+        with tab_json:
+            st.caption("Paste a Claude Desktop `mcpServers` configuration JSON snippet to import directly:")
+            json_input = st.text_area(
+                "Claude Desktop Config JSON",
+                placeholder='{\n  "mcpServers": {\n    "manim-server": {\n      "command": "python",\n      "args": ["C:/path/to/manim-mcp-server/src/manim_server.py"],\n      "env": {"MANIM_EXECUTABLE": "C:/path/to/manim.exe"}\n    }\n  }\n}',
+                height=150,
+                key="claude_json_import",
+            )
+            if st.button("Import from JSON", type="primary", key="btn_import_claude_json"):
+                try:
+                    parsed = json.loads(json_input)
+                    srv_dict = parsed.get("mcpServers", parsed) if isinstance(parsed, dict) else {}
+                    if not srv_dict or not isinstance(srv_dict, dict):
+                        st.error("JSON must contain an 'mcpServers' object or server key dictionary.")
+                    else:
+                        imported = 0
+                        for s_name, s_cfg in srv_dict.items():
+                            if not isinstance(s_cfg, dict):
+                                continue
+                            cmd = str(s_cfg.get("command") or "").strip()
+                            args = [str(a) for a in (s_cfg.get("args") or ())]
+                            env_map = {str(k): str(v) for k, v in (s_cfg.get("env") or {}).items()}
+                            s_url = str(s_cfg.get("url") or "").strip()
+                            s_trans = "streamable_http" if s_url else "stdio"
+                            mcp_service.register_server(
+                                user_id=user_id,
+                                name=s_name,
+                                transport=s_trans,
+                                enabled=True,
+                                command=cmd,
+                                args=args,
+                                env_refs=env_map,
+                                url=s_url,
+                            )
+                            imported += 1
+                        if imported > 0:
+                            st.success(f"Successfully registered {imported} server(s) from JSON.")
+                            st.rerun()
+                        else:
+                            st.error("No valid server configurations found in the JSON input.")
+                except Exception as exc:
+                    st.error(f"Invalid JSON configuration: {exc}")
 
     render_section_header("Configured Servers", f"{len(statuses)} registered")
     if not statuses:
@@ -245,6 +301,35 @@ def render_mcp_dashboard(user_id: str, mcp_service: MCPService) -> None:
                 )
                 if status.last_error:
                     st.error(status.last_error)
+                    err_str = status.last_error.lower()
+                    if ("401" in err_str or "unauth" in err_str or "api key" in err_str or "token" in err_str or "auth" in err_str) and rec is not None:
+                        with st.container():
+                            st.caption(f"🔑 **Authenticate {html.escape(rec.name)}:** Enter your API Key or Token to connect:")
+                            qf_col, qf_btn = st.columns([3, 1.2])
+                            with qf_col:
+                                quick_key = st.text_input(
+                                    "API Key or Token",
+                                    type="password",
+                                    placeholder="Paste API key or Bearer token...",
+                                    label_visibility="collapsed",
+                                    key=f"qf_inp_{sid}",
+                                )
+                            with qf_btn:
+                                if st.button("Save & Connect", type="primary", key=f"qf_btn_{sid}", use_container_width=True):
+                                    if quick_key.strip():
+                                        hdr = rec.auth_header_name or ("Authorization" if quick_key.strip().lower().startswith("bearer ") else "X-API-Key")
+                                        if quick_key.strip().lower().startswith("bearer "):
+                                            mcp_service.store_bearer_token(user_id, sid, quick_key.strip(), header_name=hdr)
+                                        else:
+                                            mcp_service.store_api_key(user_id, sid, quick_key.strip(), header_name=hdr)
+                                        try:
+                                            mcp_service.connect(sid, user_id)
+                                            st.toast(f"Connected to '{status.name}'!")
+                                            st.rerun()
+                                        except Exception as exc:
+                                            st.error(str(exc))
+                                    else:
+                                        st.error("Please enter a valid API Key or Token.")
 
                 b1, b2, b3, b4, b5, b6, b7 = st.columns(7)
                 with b1:

@@ -173,11 +173,8 @@ class AuthRepository:
             session.refresh(rec)
             return rec
 
-    def consume_oauth_state(
-        self,
-        provider: str,
-        state: str,
-    ) -> Optional[OAuthPendingState]:
+    def get_pending_state(self, state: str) -> Optional[OAuthPendingState]:
+        """Lookup an active OAuth pending state record by state parameter without consuming it."""
         if not state:
             return None
         now = datetime.now(timezone.utc)
@@ -185,7 +182,6 @@ class AuthRepository:
             rec = session.scalar(
                 select(OAuthPendingState).where(
                     OAuthPendingState.state == state,
-                    OAuthPendingState.provider == provider.lower(),
                     OAuthPendingState.consumed_at.is_(None),
                 )
             )
@@ -196,7 +192,35 @@ class AuthRepository:
                 exp = exp.replace(tzinfo=timezone.utc)
             if exp <= now:
                 return None
+            session.refresh(rec)
+            session.expunge(rec)
+            return rec
+
+    def consume_oauth_state(
+        self,
+        provider: Optional[str],
+        state: str,
+    ) -> Optional[OAuthPendingState]:
+        if not state:
+            return None
+        now = datetime.now(timezone.utc)
+        with self.db.session_scope() as session:
+            stmt = select(OAuthPendingState).where(
+                OAuthPendingState.state == state,
+                OAuthPendingState.consumed_at.is_(None),
+            )
+            if provider:
+                stmt = stmt.where(OAuthPendingState.provider == provider.lower())
+            rec = session.scalar(stmt)
+            if rec is None:
+                return None
+            exp = rec.expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp <= now:
+                return None
             rec.consumed_at = now
             session.flush()
             session.refresh(rec)
+            session.expunge(rec)
             return rec

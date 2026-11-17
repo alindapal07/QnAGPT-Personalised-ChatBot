@@ -15,11 +15,11 @@ from qna_bot.agent.mcp_adapter import build_mcp_langchain_tools
 from qna_bot.agent.nodes import _select_relevant_tools_for_binding
 from qna_bot.database.connection import DatabaseManager
 from qna_bot.database.models import MCPServerRecord
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.connection import AsyncLoopRunner, MCPConnectionHandle, _format_exception_detail, resolve_auth_headers
-from qna_bot.mcp.credentials import CredentialVault
-from qna_bot.mcp.exceptions import MCPSecurityError
-from qna_bot.mcp.oauth import OAuthFlowManager
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.connection import AsyncLoopRunner, MCPConnectionHandle, _format_exception_detail, resolve_auth_headers
+from qna_bot.mcp_client.credentials import CredentialVault
+from qna_bot.mcp_client.exceptions import MCPSecurityError
+from qna_bot.mcp_client.oauth import OAuthFlowManager
 from qna_bot.services.mcp_service import MCPService
 from tests.test_mcp_client import _FakeMCPSession, _MockHandle
 
@@ -51,7 +51,7 @@ def test_credential_vault_encrypts_at_rest_and_enforces_user_isolation(tmp_path:
         # resolve_auth_headers reads encrypted tokens cleanly
         mgr = MCPClientManager(db_manager=db)
         with patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
         ):
             rec = mgr.register_server(
@@ -77,7 +77,7 @@ def test_oauth_pkce_state_validation_exchange_refresh_revocation_and_ssrf(tmp_pa
         oauth = OAuthFlowManager(vault=vault, default_redirect_uri="http://localhost:8501/oauth/callback")
 
         with patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
         ):
             # Block SSRF metadata discovery returning private/loopback auth endpoints
@@ -173,10 +173,10 @@ def test_tool_toggle_persisted_metadata_health_and_langgraph_filtering(tmp_path:
     try:
         with (
             patch(
-                "qna_bot.mcp.security.socket.getaddrinfo",
+                "qna_bot.mcp_client.security.socket.getaddrinfo",
                 return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
             ),
-            patch("qna_bot.mcp.client_manager.MCPConnectionHandle", _MockHandle),
+            patch("qna_bot.mcp_client.client_manager.MCPConnectionHandle", _MockHandle),
         ):
             rec = svc.register_server(
                 user_id="alice",
@@ -268,12 +268,12 @@ def test_streamable_http_two_tuple_unpacking_exception_group_and_tool_binding_ca
 
     with (
         patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
         ),
-        patch("qna_bot.mcp.connection.create_mcp_http_client", _fake_http_client),
-        patch("qna_bot.mcp.connection.streamable_http_client", _fake_streamable_http),
-        patch("qna_bot.mcp.connection.ClientSession", _FakeSession),
+        patch("qna_bot.mcp_client.connection.create_mcp_http_client", _fake_http_client),
+        patch("qna_bot.mcp_client.connection.streamable_http_client", _fake_streamable_http),
+        patch("qna_bot.mcp_client.connection.ClientSession", _FakeSession),
     ):
         coro = _run()
         try:

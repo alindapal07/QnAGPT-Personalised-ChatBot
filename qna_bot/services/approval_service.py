@@ -25,6 +25,13 @@ class ApprovalService:
     ) -> List[ApprovalRecord]:
         return self.manager.list_pending(user_id=user_id, thread_id=thread_id)
 
+    def list_all(
+        self,
+        user_id: str,
+        limit: int = 100,
+    ) -> List[ApprovalRecord]:
+        return self.manager.repo.list_all(user_id=user_id, limit=limit)
+
     def record_decision(
         self,
         approval_id: str,

@@ -7,10 +7,10 @@ from unittest.mock import patch
 import pytest
 
 from qna_bot.database.models import ToolPermissionRecord
-from qna_bot.mcp.exceptions import MCPSecurityError
-from qna_bot.mcp.models import DiscoveredTool
-from qna_bot.mcp.permissions import infer_permission_category, resolve_tool_policy
-from qna_bot.mcp.security import (
+from qna_bot.mcp_client.exceptions import MCPSecurityError
+from qna_bot.mcp_client.models import DiscoveredTool
+from qna_bot.mcp_client.permissions import infer_permission_category, resolve_tool_policy
+from qna_bot.mcp_client.security import (
     format_masked_arguments,
     mask_secrets,
     sanitize_tool_output,
@@ -76,7 +76,7 @@ def test_remote_url_ssrf_and_https_protections() -> None:
 
     # DNS resolving to private IP blocked
     with patch(
-        "qna_bot.mcp.security.socket.getaddrinfo",
+        "qna_bot.mcp_client.security.socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.12.0.5", 443))],
     ):
         with pytest.raises(MCPSecurityError):
@@ -84,7 +84,7 @@ def test_remote_url_ssrf_and_https_protections() -> None:
 
     # Valid public HTTPS passes when DNS resolves to public IP
     with patch(
-        "qna_bot.mcp.security.socket.getaddrinfo",
+        "qna_bot.mcp_client.security.socket.getaddrinfo",
         return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
     ):
         assert validate_remote_url("https://mcp.example.com/mcp") == "https://mcp.example.com/mcp"

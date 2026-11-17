@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from qna_bot.core.exceptions import MemoryPersistenceError
+from qna_bot.core.logging_config import get_logger
 from qna_bot.database.connection import DatabaseManager
 from qna_bot.database.models import (
     ApprovalRecord,
@@ -13,6 +14,8 @@ from qna_bot.database.models import (
     MCPServerRecord,
     ToolPermissionRecord,
 )
+
+logger = get_logger(__name__)
 
 
 class MCPServerRepository:
@@ -431,6 +434,24 @@ class ApprovalRepository:
                 ).fetchall()
             return [self._row_to_record(r) for r in rows]
 
+    def list_all(
+        self,
+        user_id: str,
+        limit: int = 100,
+    ) -> List[ApprovalRecord]:
+        """List recent tool approvals across all statuses for this authenticated user."""
+        with self.db.lock:
+            rows = self.db.connection.execute(
+                """
+                SELECT * FROM mcp_approvals
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, int(limit)),
+            ).fetchall()
+            return [self._row_to_record(r) for r in rows]
+
     def decide(
         self,
         approval_id: str,
@@ -450,6 +471,45 @@ class ApprovalRepository:
             if cur.rowcount == 0:
                 return None
             return self.get(approval_id, user_id)
+
+    def consume_approved(
+        self,
+        approval_id: str,
+        user_id: str,
+        thread_id: str,
+        server_id: str,
+        tool_name: str,
+        arguments_hash: str,
+    ) -> bool:
+        """Atomically validate and transition an approval from APPROVED to CONSUMED.
+
+        Executes a single conditional UPDATE statement under database lock.
+        Returns True if and only if exactly one matching approved record was transitioned.
+        Returns False if the record does not exist, fields mismatch, status is not APPROVED,
+        or the approval has already been consumed (preventing race conditions / TOCTOU).
+        """
+        now = time.time()
+        try:
+            with self.db.lock:
+                cur = self.db.connection.execute(
+                    """
+                    UPDATE mcp_approvals
+                    SET status = 'CONSUMED', decided_at = ?
+                    WHERE approval_id = ?
+                      AND user_id = ?
+                      AND thread_id = ?
+                      AND server_id = ?
+                      AND tool_name = ?
+                      AND arguments_hash = ?
+                      AND status = 'APPROVED'
+                    """,
+                    (now, approval_id, user_id, thread_id, server_id, tool_name, arguments_hash),
+                )
+                self.db.connection.commit()
+                return cur.rowcount == 1
+        except Exception as exc:
+            logger.warning("Database error during atomic approval consumption: %s", exc)
+            return False
 
 
 class AuditLogRepository:

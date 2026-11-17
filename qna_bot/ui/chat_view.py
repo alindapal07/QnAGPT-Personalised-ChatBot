@@ -1,12 +1,13 @@
 """Chat message history and clean conversational turn rendering components."""
 
 import html
+import os
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import streamlit as st
 
 from qna_bot.ui.components import render_copy_button, render_sources_panel
-from qna_bot.ui.design_system import render_html
+from qna_bot.ui.design_system import ASSISTANT_BADGE_SVG, render_html
 
 
 def render_user_message(
@@ -15,12 +16,17 @@ def render_user_message(
     image_mime: str = "image/png",
     images: Optional[Sequence[Dict[str, Any]]] = None,
     attached_docs: Optional[Sequence[str]] = None,
+    index: int = 0,
+    allow_edit: bool = True,
 ) -> None:
-    """Render a subtle right-aligned user prompt with attachment chips and image previews."""
-    _, col_user = st.columns([1, 5])
-    with col_user:
-        render_html('<div class="msg-label-user">You</div>')
+    """Render a clean conversational user prompt with avatar, attachment chips, and optional edit action."""
+    if allow_edit:
+        col_user, col_edit = st.columns([11, 0.8])
+    else:
+        col_user = st.container()
+        col_edit = None
 
+    with col_user:
         doc_names = list(attached_docs or [])
         if doc_names:
             chips = "".join(
@@ -38,14 +44,27 @@ def render_user_message(
             if b64_val:
                 img_tag = (
                     f'<img src="data:{mime_val};base64,{b64_val}" '
-                    'style="max-width:100%;max-height:240px;border-radius:8px;'
+                    'style="max-width:100%;max-height:240px;border-radius:10px;'
                     'display:inline-block;margin-bottom:8px;border:1px solid #E2E8F0;" />'
                 )
-                render_html(f'<div style="text-align:right">{img_tag}</div>')
+                render_html(f'<div style="text-align:left">{img_tag}</div>')
 
         if content.strip():
             with st.chat_message("user"):
                 st.markdown(content)
+
+    if allow_edit and col_edit is not None:
+        with col_edit:
+            btn_key = f"edit_prompt_{index}_{abs(hash(content)) % 1000000}"
+            if content.strip() and st.button(
+                "",
+                icon=":material/edit:",
+                key=btn_key,
+                help="Edit this prompt in the composer",
+                type="tertiary",
+            ):
+                st.session_state.prompt_to_send = content
+                st.rerun()
 
 
 def render_ai_message(
@@ -58,75 +77,93 @@ def render_ai_message(
     execution_trace: Optional[Sequence[Dict[str, Any]]] = None,
     on_feedback: Optional[Callable[[str, str], None]] = None,
 ) -> None:
-    """Render an assistant response using clean document typography and a functional toolbar."""
-    col_ai, _ = st.columns([11, 1])
-    with col_ai:
-        render_html('<div class="msg-label-ai">QnAGPT</div>')
-        with st.chat_message("assistant"):
-            st.markdown(content)
-            render_sources_panel(
-                sources=sources,
-                web_sources=web_sources,
-                tool_events=tool_events,
-                execution_trace=execution_trace,
-            )
+    """Render an assistant response using document-like typography, citations, and reference action bar."""
+    render_html(
+        f'<div class="chat-turn-header" style="margin-left:2px;margin-bottom:4px;">'
+        f'<span class="chat-ai-name" style="font-size:13px;font-weight:700;color:#202333;">QnAGPT</span>'
+        f'{ASSISTANT_BADGE_SVG}'
+        f'</div>'
+    )
+    with st.chat_message("assistant"):
+        st.markdown(content)
+        for tok in content.split():
+            clean_tok = tok.strip("\"'()[]:;,.")
+            if clean_tok.lower().endswith((".mp4", ".webm")) and os.path.exists(clean_tok):
+                st.video(clean_tok)
+                break
+            elif clean_tok.lower().endswith((".png", ".jpg", ".jpeg")) and os.path.exists(clean_tok):
+                st.image(clean_tok)
+                break
+        render_sources_panel(
+            sources=sources,
+            web_sources=web_sources,
+            tool_events=tool_events,
+            execution_trace=execution_trace,
+        )
 
-        feedback_map = st.session_state.get("feedback") or {}
-        cur_fb = feedback_map.get(index)
+    feedback_map = st.session_state.get("feedback") or {}
+    cur_fb = feedback_map.get(index)
 
-        a_help, a_unhelp, a_copy, a_exp, a_regen, _ = st.columns([1.05, 1.2, 0.9, 1.0, 1.35, 3.5])
-        with a_help:
-            if st.button(
-                "Helpful",
-                key=f"helpful_{index}",
-                type="secondary" if cur_fb == "helpful" else "tertiary",
-                icon=":material/thumb_up:",
-            ):
-                st.session_state.feedback[index] = "helpful"
-                if on_feedback is not None:
-                    try:
-                        on_feedback("up", content)
-                    except Exception:
-                        pass
-                st.toast("Marked as helpful.")
-                st.rerun()
-        with a_unhelp:
-            if st.button(
-                "Not helpful",
-                key=f"unhelpful_{index}",
-                type="secondary" if cur_fb == "unhelpful" else "tertiary",
-                icon=":material/thumb_down:",
-            ):
-                st.session_state.feedback[index] = "unhelpful"
-                if on_feedback is not None:
-                    try:
-                        on_feedback("down", content)
-                    except Exception:
-                        pass
-                st.toast("Feedback recorded.")
-                st.rerun()
-        with a_copy:
-            render_copy_button(content, f"ai_{index}")
-        with a_exp:
+    a_help, a_unhelp, a_copy, a_more, _, a_regen = st.columns([0.7, 0.7, 0.7, 0.8, 3.8, 1.4])
+    with a_help:
+        if st.button(
+            "",
+            key=f"helpful_{index}",
+            type="secondary" if cur_fb == "helpful" else "tertiary",
+            icon=":material/thumb_up:",
+            help="Helpful",
+        ):
+            st.session_state.feedback[index] = "helpful"
+            if on_feedback is not None:
+                try:
+                    on_feedback("up", content)
+                except Exception:
+                    pass
+            st.toast("Marked as helpful.")
+            st.rerun()
+    with a_unhelp:
+        if st.button(
+            "",
+            key=f"unhelpful_{index}",
+            type="secondary" if cur_fb == "unhelpful" else "tertiary",
+            icon=":material/thumb_down:",
+            help="Not helpful",
+        ):
+            st.session_state.feedback[index] = "unhelpful"
+            if on_feedback is not None:
+                try:
+                    on_feedback("down", content)
+                except Exception:
+                    pass
+            st.toast("Feedback recorded.")
+            st.rerun()
+    with a_copy:
+        render_copy_button(content, f"ai_{index}")
+    with a_more:
+        with st.popover("", icon=":material/more_vert:", help="More actions"):
+            st.caption("Response Actions")
             if callable(getattr(st, "download_button", None)):
                 st.download_button(
-                    "Export",
+                    "Export Markdown",
                     data=content,
                     file_name=f"qnagpt_response_{index + 1}.md",
                     mime="text/markdown",
                     icon=":material/download:",
                     key=f"export_ai_{index}",
+                    use_container_width=True,
                 )
-        with a_regen:
-            if is_last_ai and st.button(
-                "Regenerate",
-                key=f"regen_{index}",
-                type="tertiary",
-                icon=":material/refresh:",
-            ):
-                st.session_state.messages.pop()
-                st.session_state.prompt_to_send = "__REGENERATE__"
-                st.rerun()
+    with a_regen:
+        if is_last_ai and st.button(
+            "Regenerate",
+            key=f"regen_{index}",
+            type="tertiary",
+            icon=":material/refresh:",
+            help="Regenerate response",
+            use_container_width=True,
+        ):
+            st.session_state.messages.pop()
+            st.session_state.prompt_to_send = "__REGENERATE__"
+            st.rerun()
 
 
 def render_chat_history(
@@ -152,6 +189,7 @@ def render_chat_history(
                 image_mime=msg.get("image_mime", "image/png"),
                 images=msg.get("images"),
                 attached_docs=msg.get("attached_docs"),
+                index=idx,
             )
         elif role == "assistant":
             render_ai_message(

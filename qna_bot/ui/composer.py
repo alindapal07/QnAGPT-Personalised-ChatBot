@@ -61,7 +61,7 @@ def render_chat_composer(
     nonce = st.session_state.get("composer_nonce", 0)
 
     raw_value = st.chat_input(
-        "Ask anything, research the web, run MCP tools, or attach files...",
+        "What's in your mind?... (Enter to send, attach files with +)",
         key=f"main_chat_composer_{nonce}",
         accept_file="multiple",
         file_type=accepted_types,

@@ -4,45 +4,50 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
+    --canvas-background:   #EEF3FB;
     --app-background:      #FFFFFF;
-    --sidebar-background:  #F8FAFC;
+    --main-surface:        #FFFFFF;
+    --sidebar-background:  #FFFFFF;
     --surface:             #FFFFFF;
-    --surface-secondary:   #F8FAFC;
-    --surface-hover:       #F1F5F9;
-    --border:              #E2E8F0;
-    --border-strong:       #CBD5E1;
-    --text-primary:        #172033;
-    --text-secondary:      #64748B;
-    --text-muted:          #64748B;
+    --surface-secondary:   #F7F8FC;
+    --surface-hover:       #F0F3FA;
+    --border:              #E9EBF2;
+    --border-strong:       #D3D8E6;
+    --text-primary:        #202333;
+    --text-secondary:      #73798C;
+    --text-muted:          #A0A5B4;
     --input-background:    #FFFFFF;
-    --input-text:          #172033;
-    --input-placeholder:   #94A3B8;
-    --accent:              #315EAB;
-    --accent-hover:        #24498A;
-    --accent-soft:         #EFF4FB;
-    --accent-border:       #C7D6EE;
-    --code-background:     #F8FAFC;
-    --code-text:           #172033;
-    --dot-status:          #15803D;
-    --dot-error:           #B91C1C;
-    --success-fg:          #15803D;
-    --success-bg:          #F0FDF4;
-    --success-border:      #BBF7D0;
-    --warn-fg:             #B45309;
-    --warn-bg:             #FFFBEB;
-    --warn-border:         #FDE68A;
-    --err-fg:              #B91C1C;
-    --err-bg:              #FEF2F2;
-    --err-border:          #FECACA;
-    --radius-sm:           6px;
-    --radius-md:           8px;
-    --radius-lg:           10px;
-    --shadow-sm:           0 1px 2px rgba(23, 32, 51, 0.04);
+    --input-text:          #202333;
+    --input-placeholder:   #A0A5B4;
+    --accent:              #5B61F6;
+    --accent-hover:        #4B50E8;
+    --accent-soft:         #EEF2FF;
+    --accent-border:       #D5DAFC;
+    --code-background:     #F7F8FC;
+    --code-text:           #202333;
+    --dot-status:          #239B72;
+    --dot-error:           #D95363;
+    --success-fg:          #239B72;
+    --success-bg:          #EBF8F3;
+    --success-border:      #B7E7D5;
+    --warn-fg:             #D99A35;
+    --warn-bg:             #FEF7EC;
+    --warn-border:         #F7D8A7;
+    --err-fg:              #D95363;
+    --err-bg:              #FDF2F3;
+    --err-border:          #F7C1C7;
+    --radius-sm:           8px;
+    --radius-md:           12px;
+    --radius-lg:           16px;
+    --radius-xl:           20px;
+    --shadow-sm:           0 1px 2px rgba(32, 35, 51, 0.04);
+    --shadow-card:         0 4px 20px rgba(32, 35, 51, 0.05);
+    --shadow-float:        0 8px 30px rgba(32, 35, 51, 0.08);
 }
 
-/* ── Application Shell & Responsive Width ───────────────────────────────── */
+/* ── Application Shell & Responsive Canvas ──────────────────────────────── */
 html, body, .stApp {
-    background-color: var(--app-background);
+    background-color: var(--canvas-background);
     color: var(--text-primary);
     font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     font-size: 14px;
@@ -54,21 +59,27 @@ html, body, .stApp {
 .stAppViewContainer {
     width: 100%;
     max-width: 100vw;
+    background-color: var(--canvas-background);
 }
 
 [data-testid="stMain"] {
     flex: 1 1 auto !important;
     min-width: 0 !important;
     width: 100% !important;
+    background-color: var(--canvas-background);
 }
 
 .main .block-container {
     width: 100%;
     max-width: 1140px;
-    padding: 1.1rem 1.75rem 6rem;
-    margin: 0 auto;
-    background-color: var(--app-background);
+    padding: 1.4rem 2rem 6.5rem;
+    margin: 1rem auto 1.5rem;
+    background-color: var(--main-surface);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-card);
     transition: max-width 0.16s ease, padding 0.16s ease;
+    min-height: calc(100vh - 3.5rem);
 }
 
 /* Chat page reads comfortably when sidebar is open, expands proportionally when collapsed */
@@ -151,78 +162,85 @@ section[data-testid="stSidebar"] > div:first-child {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 2px 0.6rem;
+    padding: 0.2rem 4px 0.75rem;
     border-bottom: 1px solid var(--border);
-    margin-bottom: 0.55rem;
+    margin-bottom: 0.65rem;
 }
 
 .sb-brand-left {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
 }
 
 .sb-brand {
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 800;
     color: var(--text-primary);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
 }
 
 .sb-badge {
     font-size: 10.5px;
-    font-weight: 500;
+    font-weight: 700;
     color: var(--accent);
-    background-color: var(--accent-soft);
+    background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%);
     border: 1px solid var(--accent-border);
     border-radius: 999px;
-    padding: 1px 7px;
+    padding: 2px 8px;
+    letter-spacing: 0.02em;
 }
 
 .sb-section-label {
-    font-size: 10px;
-    font-weight: 600;
+    font-size: 10.5px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-secondary);
-    margin: 0.65rem 4px 0.2rem;
+    letter-spacing: 0.07em;
+    color: #94A3B8;
+    margin: 14px 6px 4px 6px;
 }
 
 .sb-bucket-label {
     font-size: 10.5px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin: 0.4rem 4px 0.15rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94A3B8;
+    margin: 10px 6px 3px 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .sb-divider {
     border: none;
     border-top: 1px solid var(--border);
-    margin: 0.55rem 0;
+    margin: 0.75rem 0;
 }
 
 .sb-footer-card {
-    background-color: var(--surface);
+    background-color: var(--surface-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 8px 10px;
-    margin-top: 0.25rem;
+    padding: 10px 12px;
+    margin-top: 0.35rem;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
 }
 
 .sb-status {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text-primary);
 }
 
 .sb-status .dot-status,
 .sb-status .dot-ok,
 .sb-status .dot-err {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     flex-shrink: 0;
 }
@@ -230,17 +248,19 @@ section[data-testid="stSidebar"] > div:first-child {
 .sb-status .dot-status,
 .sb-status .dot-ok {
     background: var(--dot-status);
+    box-shadow: 0 0 0 2.5px rgba(35, 155, 114, 0.2);
 }
 
 .sb-status .dot-err {
     background: var(--dot-error);
+    box-shadow: 0 0 0 2.5px rgba(217, 83, 99, 0.2);
 }
 
 .sb-meta-row {
     font-size: 11px;
     color: var(--text-secondary);
-    margin-top: 3px;
-    line-height: 1.4;
+    margin-top: 4px;
+    line-height: 1.45;
 }
 
 .sb-user-pill {
@@ -251,21 +271,43 @@ section[data-testid="stSidebar"] > div:first-child {
     border-top: 1px solid var(--border);
 }
 
+/* ── Refined Sidebar Action Buttons: Primary "New chat" & Controls ──────── */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
+    background: linear-gradient(135deg, #5B61F6 0%, #4B50E8 100%) !important;
+    border: 1px solid #4B50E8 !important;
+    color: #FFFFFF !important;
+    justify-content: center !important;
+    border-radius: 999px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 3px 12px rgba(91, 97, 246, 0.28) !important;
+    transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #4B50E8 0%, #3B40D6 100%) !important;
+    border-color: #3B40D6 !important;
+    box-shadow: 0 5px 18px rgba(91, 97, 246, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
+
 /* ── Compact Sidebar Buttons & Ellipsis Truncation ──────────────────────── */
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
-    gap: 0.28rem;
+    gap: 0.25rem;
 }
 
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
     border-radius: var(--radius-sm);
     font-size: 13px;
     font-weight: 500;
-    min-height: 32px;
-    height: 32px;
-    padding: 3px 9px;
+    min-height: 34px;
+    height: 34px;
+    padding: 4px 10px;
     justify-content: flex-start;
     overflow: hidden;
-    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 section[data-testid="stSidebar"] div[data-testid="stButton"] > button p {
@@ -274,55 +316,324 @@ section[data-testid="stSidebar"] div[data-testid="stButton"] > button p {
     text-overflow: ellipsis;
     text-align: left;
     font-size: 12.5px;
-    line-height: 1.3;
+    line-height: 1.35;
     margin: 0;
 }
 
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="tertiary"] {
-    background-color: transparent;
-    border: 1px solid transparent;
-    color: var(--text-primary);
-    box-shadow: none;
+/* Inactive Sidebar Buttons (Nav items) */
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="tertiary"] {
+    background-color: transparent !important;
+    border: 1px solid transparent !important;
+    color: #475569 !important;
+    box-shadow: none !important;
 }
 
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="tertiary"]:hover {
-    background-color: var(--surface-hover);
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="tertiary"]:hover {
+    background-color: #F1F5F9 !important;
+    border-color: #E2E8F0 !important;
+    color: #0F172A !important;
+    transform: translateX(2.5px) !important;
 }
 
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="secondary"] {
-    background-color: var(--accent-soft);
-    color: var(--accent);
-    border: 1px solid var(--accent-border);
-    box-shadow: none;
+/* Active Sidebar Buttons (Active Page in Nav) */
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="secondary"] {
+    background: linear-gradient(135deg, #EEF2FF 0%, #F5F3FF 100%) !important;
+    color: #4338CA !important;
+    border: 1px solid #C7D2FE !important;
+    border-left: 3.5px solid #5B61F6 !important;
+    border-radius: var(--radius-sm) !important;
+    box-shadow: 0 2px 8px rgba(91, 97, 246, 0.1) !important;
+    font-weight: 600 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="secondary"]:hover {
+    background: linear-gradient(135deg, #E0E7FF 0%, #EDE9FE 100%) !important;
+    border-color: #A5B4FC !important;
+    color: #3730A3 !important;
+    transform: translateX(1.5px) !important;
+}
+
+/* ── Conversation History Rows ───────────────────────────────────────────── */
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) {
+    align-items: center !important;
+    gap: 4px !important;
+    margin-bottom: 2px !important;
+    min-height: 40px !important;
+    max-height: 44px !important;
+    height: 42px !important;
+    border-radius: 8px !important;
+    padding: 0 2px !important;
+    transition: background-color 140ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button {
+    height: 40px !important;
+    min-height: 40px !important;
+    max-height: 40px !important;
+    border-radius: 8px !important;
+    padding: 0 10px !important;
+    font-size: 13.5px !important;
+    gap: 10px !important;
+    justify-content: flex-start !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button p {
+    font-size: 13.5px !important;
+    line-height: 1.4 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+/* Inactive Conversation Thread */
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="tertiary"] {
+    background-color: transparent !important;
+    border: 1px solid transparent !important;
+    color: #334155 !important;
+    box-shadow: none !important;
+    transition: background-color 140ms ease, color 140ms ease !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="tertiary"]:hover {
+    background-color: #F8FAFC !important;
+    border-color: #E2E8F0 !important;
+    color: #0F172A !important;
+    transform: none !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="tertiary"] svg {
+    color: #64748B !important;
+    width: 16px !important;
+    height: 16px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="tertiary"]:hover svg {
+    color: #1E293B !important;
+}
+
+/* Active Selected Conversation Thread (Restrained Light-Green) */
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="secondary"] {
+    background: #F0FDF4 !important;
+    color: #166534 !important;
+    border: 1px solid #BBF7D0 !important;
+    border-left: 3.5px solid #16A34A !important;
+    border-radius: 8px !important;
+    box-shadow: 0 1px 3px rgba(22, 163, 74, 0.08) !important;
+    font-weight: 600 !important;
+    transform: none !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="secondary"] svg {
+    color: #16A34A !important;
+    fill: none !important;
+    width: 16px !important;
+    height: 16px !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="secondary"] p {
+    color: #166534 !important;
+    font-weight: 600 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) div[data-testid="stButton"] > button[kind="secondary"]:hover {
+    background: #DCFCE7 !important;
+    border-color: #86EFAC !important;
+    border-left-color: #15803D !important;
+    color: #14532D !important;
+    transform: none !important;
+}
+
+/* ── Contextual Action 3-Dot Button ──────────────────────────────────────── */
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] > div > button {
+    min-height: 32px !important;
+    height: 32px !important;
+    max-height: 32px !important;
+    width: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 8px !important;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+    color: #94A3B8 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: none !important;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] > div > button svg {
+    width: 18px !important;
+    height: 18px !important;
+    color: #94A3B8 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] > div > button:hover {
+    background-color: #F1F5F9 !important;
+    border-color: #E2E8F0 !important;
+    color: #475569 !important;
+    transform: none !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] > div > button:hover svg {
+    color: #475569 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] > div > button:focus-visible {
+    outline: 2px solid #CBD5E1 !important;
+    outline-offset: 1px !important;
+}
+
+/* Hover reveal on desktop, accessible on touch */
+@media (hover: hover) {
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] {
+        opacity: 0;
+        transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]):hover [data-testid="stPopover"],
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]):focus-within [data-testid="stPopover"],
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"]:has([aria-expanded="true"]) {
+        opacity: 1 !important;
+    }
+}
+@media (hover: none) {
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has([data-testid="stPopover"]) [data-testid="stPopover"] {
+        opacity: 1 !important;
+    }
+}
+
+/* ── Contextual Dropdown Menu Popover ───────────────────────────────────── */
+div[data-testid="stPopoverBody"],
+div[data-testid="stPopoverContent"] {
+    background: #FFFFFF !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 12px !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04) !important;
+    width: 204px !important;
+    min-width: 190px !important;
+    max-width: 220px !important;
+    padding: 6px !important;
+    overflow: hidden !important;
+}
+
+div[data-testid="stPopoverBody"] div[data-testid="stButton"] > button,
+div[data-testid="stPopoverContent"] div[data-testid="stButton"] > button {
+    height: 34px !important;
+    min-height: 34px !important;
+    border-radius: 6px !important;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+    color: #334155 !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    justify-content: flex-start !important;
+    padding: 6px 10px !important;
+    gap: 8px !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    transition: background-color 120ms ease, color 120ms ease !important;
+}
+
+div[data-testid="stPopoverBody"] div[data-testid="stButton"] > button:hover,
+div[data-testid="stPopoverContent"] div[data-testid="stButton"] > button:hover {
+    background-color: #F8FAFC !important;
+    color: #0F172A !important;
+    border-color: transparent !important;
+    transform: none !important;
+}
+
+div[data-testid="stPopoverBody"] div[data-testid="stButton"] > button[key*="del_"],
+div[data-testid="stPopoverContent"] div[data-testid="stButton"] > button[key*="del_"] {
+    color: #DC2626 !important;
+}
+
+div[data-testid="stPopoverBody"] div[data-testid="stButton"] > button[key*="del_"]:hover,
+div[data-testid="stPopoverContent"] div[data-testid="stButton"] > button[key*="del_"]:hover {
+    background-color: #FEF2F2 !important;
+    color: #B91C1C !important;
+}
+
+div[data-testid="stPopoverBody"] hr.conv-menu-divider,
+div[data-testid="stPopoverContent"] hr.conv-menu-divider {
+    border: none !important;
+    border-top: 1px solid #F1F5F9 !important;
+    margin: 4px 0 !important;
+}
+
+.conv-menu-header {
+    font-size: 11px;
     font-weight: 600;
+    color: #94A3B8;
+    padding: 4px 8px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-bottom: 1px solid #F1F5F9;
+    margin-bottom: 4px;
 }
 
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"] {
-    background-color: var(--accent);
-    border: 1px solid var(--accent);
-    color: #FFFFFF;
-    justify-content: center;
-    height: 34px;
+/* ── Clear All Link in Conversation Header ───────────────────────────────── */
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button[data-testid*="sb_conv_clear_all"]) > button,
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button[key="sb_conv_clear_all"]) > button {
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    color: var(--accent) !important;
+    padding: 2px 4px !important;
+    min-height: 26px !important;
+    height: 26px !important;
+    justify-content: flex-end !important;
 }
 
-section[data-testid="stSidebar"] div[data-testid="stButton"] > button[kind="primary"]:hover {
-    background-color: var(--accent-hover);
-    border-color: var(--accent-hover);
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button[data-testid*="sb_conv_clear_all"]) > button:hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button[key="sb_conv_clear_all"]) > button:hover {
+    color: #4338CA !important;
+    text-decoration: underline !important;
+    background: transparent !important;
+    transform: none !important;
 }
 
-section[data-testid="stSidebar"] [data-testid="stPopover"] > div > button {
-    min-height: 32px;
-    height: 32px;
-    padding: 2px 4px;
-    border-radius: var(--radius-sm);
-    border: 1px solid transparent;
+/* ── Search Toggle Icon Button ───────────────────────────────────────────── */
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button[key="sb_toggle_search"]) > button {
+    border-radius: 12px !important;
+    background: #F8FAFC !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-secondary) !important;
+    justify-content: center !important;
+    padding: 0 !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button[key="sb_toggle_search"]) > button:hover {
+    background: #EEF2FF !important;
+    border-color: var(--accent-border) !important;
+    color: var(--accent) !important;
+    transform: scale(1.04) !important;
+}
+
+/* ── Conversation History Scrollable Container Custom Scrollbar ─────────── */
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[style*="overflow"],
+section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] div[data-testid="stVerticalBlockBorderWrapper"] {
+    scrollbar-width: thin;
+    scrollbar-color: #CBD5E1 transparent;
+}
+
+section[data-testid="stSidebar"] ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+}
+
+section[data-testid="stSidebar"] ::-webkit-scrollbar-track {
     background: transparent;
-    color: var(--text-secondary);
 }
 
-section[data-testid="stSidebar"] [data-testid="stPopover"] > div > button:hover {
-    background-color: var(--surface-hover);
-    color: var(--text-primary);
+section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 999px;
+}
+
+section[data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover {
+    background: #94A3B8;
 }
 
 /* ── Main Buttons & Form Controls ───────────────────────────────────────── */
@@ -595,20 +906,40 @@ details {
     margin: 4px 0 10px;
 }
 
+.tl-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-subtle, #EDF2F7);
+}
+
 .tl-header {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-secondary);
-    margin-bottom: 6px;
+}
+
+.tl-step-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    border-radius: 999px;
+    padding: 1px 7px;
 }
 
 .tl-row {
     display: flex;
     align-items: flex-start;
     gap: 8px;
-    padding: 2.5px 0;
+    padding: 3px 0;
     font-size: 12.5px;
     line-height: 1.45;
 }
@@ -618,6 +949,14 @@ details {
     margin-top: 2px;
     display: inline-flex;
     align-items: center;
+}
+
+.tl-content {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 auto;
 }
 
 .tl-label-done {
@@ -637,7 +976,47 @@ details {
 .tl-detail {
     color: var(--text-secondary);
     font-size: 12px;
-    margin-left: 6px;
+}
+
+.tl-chip-srv {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--surface);
+    padding: 1px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    display: inline-flex;
+    align-items: center;
+}
+
+.tl-chip-tool {
+    font-family: var(--font-mono, monospace);
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--accent-border);
+    display: inline-flex;
+    align-items: center;
+}
+
+.tl-chip-dur {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.tl-spinner {
+    animation: tl-spin 1.2s linear infinite;
+    transform-origin: center;
+}
+
+@keyframes tl-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 /* ── Chat Messages, Tables, Code Blocks ─────────────────────────────────── */
@@ -843,6 +1222,171 @@ code:not(pre > code) {
     margin-bottom: 6px;
 }
 
+/* ── Human-In-The-Loop High-End Approval Card ────────────────────────────── */
+.mcp-appr-card {
+    background: linear-gradient(180deg, #FFFFFF 0%, #FAFBFF 100%) !important;
+    border: 1px solid #E2E8F0 !important;
+    border-left: 4px solid var(--accent, #5B61F6) !important;
+    border-radius: 14px !important;
+    padding: 16px 18px !important;
+    margin: 12px 0 16px !important;
+    box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05) !important;
+}
+
+
+.mcp-appr-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.mcp-appr-icon-badge {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%);
+    border: 1px solid #C7D2FE;
+    color: #4F46E5;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.mcp-appr-title-group {
+    flex: 1 1 auto;
+}
+
+.mcp-appr-title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-primary, #0F172A);
+}
+
+.mcp-appr-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary, #64748B);
+    line-height: 1.4;
+    margin-top: 1px;
+}
+
+.mcp-appr-pill {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 3px 10px;
+    flex-shrink: 0;
+}
+
+.appr-cat-sens {
+    background-color: #FEF2F2;
+    border: 1px solid #FECACA;
+    color: #DC2626;
+}
+
+.appr-cat-mod {
+    background-color: #FEF3C7;
+    border: 1px solid #FCD34D;
+    color: #B45309;
+}
+
+.mcp-appr-meta-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--surface-secondary, #F8FAFC);
+    border: 1px solid var(--border-subtle, #EDF2F7);
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--text-secondary, #475569);
+    margin-bottom: 12px;
+}
+
+.mcp-meta-item strong {
+    color: var(--text-primary, #0F172A);
+}
+
+.mcp-meta-divider {
+    color: #CBD5E1;
+}
+
+.mcp-meta-reason {
+    font-style: italic;
+    color: var(--text-secondary, #64748B);
+}
+
+/* ── Approval Action Buttons (Emerald Approve & Clean Deny) ──────────── */
+.appr-btn-wrap div[data-testid="stButton"] > button,
+.appr-btn-wrap button {
+    background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+    color: #FFFFFF !important;
+    border: 1px solid #059669 !important;
+    font-weight: 600 !important;
+    font-size: 13.5px !important;
+    border-radius: 999px !important;
+    padding: 0.45rem 1.25rem !important;
+    box-shadow: 0 2px 6px rgba(16, 185, 129, 0.25) !important;
+    transition: all 0.15s ease !important;
+    width: 100% !important;
+}
+
+.appr-btn-wrap div[data-testid="stButton"] > button:hover,
+.appr-btn-wrap button:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.38) !important;
+    transform: translateY(-1px) !important;
+}
+
+.rej-btn-wrap div[data-testid="stButton"] > button,
+.rej-btn-wrap button {
+    background: var(--surface, #FFFFFF) !important;
+    color: var(--text-secondary, #64748B) !important;
+    border: 1px solid #CBD5E1 !important;
+    font-weight: 500 !important;
+    font-size: 13.5px !important;
+    border-radius: 999px !important;
+    padding: 0.45rem 1.25rem !important;
+    transition: all 0.15s ease !important;
+    width: 100% !important;
+}
+
+.rej-btn-wrap div[data-testid="stButton"] > button:hover,
+.rej-btn-wrap button:hover {
+    background: #FEF2F2 !important;
+    color: #EF4444 !important;
+    border-color: #FCA5A5 !important;
+    box-shadow: 0 2px 6px rgba(239, 68, 68, 0.15) !important;
+}
+
+/* ── Streamlit Status Widget Full-Width Modern Card ─────────────────────── */
+div[data-testid="stStatusWidget"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    background: var(--surface, #FFFFFF) !important;
+    border: 1px solid var(--border, #E2E8F0) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04) !important;
+    margin: 8px 0 12px !important;
+    padding: 2px 6px !important;
+}
+
+div[data-testid="stStatusWidget"] summary {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    color: var(--text-primary, #0F172A) !important;
+}
+
+/* Hide Streamlit default orange robot avatar in chat messages when custom badge is active */
+div[data-testid="stChatMessageAvatarAssistant"] {
+    display: none !important;
+}
+
 .workspace-card {
     background-color: var(--surface);
     border: 1px solid var(--border);
@@ -999,19 +1543,278 @@ code:not(pre > code) {
     text-decoration: underline;
 }
 
-/* ── Composer Bar ───────────────────────────────────────────────────────── */
-div[data-testid="stChatInputContainer"] {
-    border-top: 1px solid var(--border);
-    background-color: var(--app-background);
-    padding: 0.55rem 0;
+/* ── Floating Message Composer (Phase 8 Premium Workspace) ───────────────── */
+div[data-testid="stBottom"] {
+    background: transparent !important;
+    background-color: transparent !important;
 }
 
-div[data-testid="stChatInputContainer"] textarea {
-    background-color: var(--input-background);
-    color: var(--input-text);
+div[data-testid="stBottom"] > div {
+    background: transparent !important;
+    background-color: transparent !important;
+}
+
+div[data-testid="stChatInputContainer"] {
+    border-top: none !important;
+    background: transparent !important;
+    max-width: 860px !important;
+    margin: 0 auto !important;
+    padding: 0 0 1.25rem 0 !important;
+}
+
+/* Outer Chat Input Pill Container */
+div[data-testid="stChatInput"] {
+    background: #FFFFFF !important;
+    background-color: #FFFFFF !important;
+    border: 1.5px solid #E2E8F0 !important;
+    border-radius: 999px !important;
+    box-shadow: 0 6px 24px rgba(15, 23, 42, 0.07), 0 1px 3px rgba(15, 23, 42, 0.03) !important;
+    padding: 4px 8px 4px 6px !important;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    display: flex !important;
+    align-items: center !important;
+    overflow: hidden !important;
+}
+
+div[data-testid="stChatInput"]:hover {
+    border-color: #CBD5E1 !important;
+    box-shadow: 0 8px 28px rgba(15, 23, 42, 0.1), 0 2px 5px rgba(15, 23, 42, 0.04) !important;
+}
+
+div[data-testid="stChatInput"]:focus-within {
+    border-color: #5B61F6 !important;
+    box-shadow: 0 8px 32px rgba(91, 97, 246, 0.16), 0 0 0 3.5px rgba(91, 97, 246, 0.12) !important;
+}
+
+/* ── CRITICAL: Remove All Internal Rectangular Divs, Borders, and Backgrounds ── */
+div[data-testid="stChatInput"] * {
+    box-shadow: none !important;
+}
+
+div[data-testid="stChatInput"] div,
+div[data-testid="stChatInput"] > div,
+div[data-testid="stChatInput"] [data-baseweb],
+div[data-testid="stChatInput"] [data-baseweb="base-input"],
+div[data-testid="stChatInput"] [data-baseweb="textarea"],
+div[data-testid="stChatInput"] [data-baseweb="input"],
+div[data-testid="stChatInput"] div[class*="stChatInput"],
+div[data-testid="stChatInput"] div[class*="InputArea"],
+div[data-testid="stChatInput"] div[class*="TextArea"],
+div[data-testid="stChatInput"] div:has(textarea) {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    border-color: transparent !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    margin: 0 !important;
+}
+
+/* Pristine Textarea Typography and Seamless Centering */
+div[data-testid="stChatInput"] textarea {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #1E293B !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    font-size: 14.5px !important;
+    font-weight: 450 !important;
+    line-height: 1.5 !important;
+    padding: 8px 14px !important;
+    margin: 0 !important;
+    resize: none !important;
+    border-radius: 0 !important;
+}
+
+div[data-testid="stChatInput"] textarea:focus {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="stChatInput"] textarea::placeholder {
+    color: #94A3B8 !important;
+    font-size: 14px !important;
+    font-weight: 400 !important;
+}
+
+/* File Upload Attachment (+) Button on Left */
+div[data-testid="stChatInput"] div[data-testid="stChatInputFileUploadButton"],
+div[data-testid="stChatInput"] button[data-testid="stChatInputFileUploadButton"],
+div[data-testid="stChatInput"] button:first-of-type {
+    background: linear-gradient(135deg, #5B61F6 0%, #4B50E8 100%) !important;
+    color: #FFFFFF !important;
+    border-radius: 50% !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    border: none !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: 0 2px 8px rgba(91, 97, 246, 0.3) !important;
+    transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), background 0.16s ease, box-shadow 0.16s ease !important;
+    margin-right: 2px !important;
+    flex-shrink: 0 !important;
+    cursor: pointer !important;
+}
+
+div[data-testid="stChatInput"] div[data-testid="stChatInputFileUploadButton"]:hover,
+div[data-testid="stChatInput"] button[data-testid="stChatInputFileUploadButton"]:hover,
+div[data-testid="stChatInput"] button:first-of-type:hover {
+    background: linear-gradient(135deg, #4B50E8 0%, #3B40D6 100%) !important;
+    transform: scale(1.06) !important;
+    box-shadow: 0 4px 14px rgba(91, 97, 246, 0.42) !important;
+}
+
+/* Submit Send (Arrow Up) Button on Right */
+div[data-testid="stChatInput"] button[data-testid="stChatInputSubmitButton"],
+div[data-testid="stChatInput"] button:last-of-type {
+    background: linear-gradient(135deg, #5B61F6 0%, #4B50E8 100%) !important;
+    color: #FFFFFF !important;
+    border-radius: 50% !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    border: none !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: 0 2px 8px rgba(91, 97, 246, 0.3) !important;
+    transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), background 0.16s ease, box-shadow 0.16s ease !important;
+    margin-left: 2px !important;
+    flex-shrink: 0 !important;
+    cursor: pointer !important;
+}
+
+div[data-testid="stChatInput"] button[data-testid="stChatInputSubmitButton"]:hover,
+div[data-testid="stChatInput"] button:last-of-type:hover {
+    background: linear-gradient(135deg, #4B50E8 0%, #3B40D6 100%) !important;
+    transform: scale(1.06) !important;
+    box-shadow: 0 4px 14px rgba(91, 97, 246, 0.42) !important;
+}
+
+div[data-testid="stChatInput"] button:disabled,
+div[data-testid="stChatInput"] button[data-testid="stChatInputSubmitButton"]:disabled {
+    background: #E2E8F0 !important;
+    color: #94A3B8 !important;
+    box-shadow: none !important;
+    transform: none !important;
+    cursor: not-allowed !important;
+}
+
+div[data-testid="stChatInput"] button svg {
+    fill: #FFFFFF !important;
+    color: #FFFFFF !important;
+    stroke: #FFFFFF !important;
+    width: 19px !important;
+    height: 19px !important;
+}
+
+div[data-testid="stChatInput"] button:disabled svg {
+    fill: #94A3B8 !important;
+    color: #94A3B8 !important;
+    stroke: #94A3B8 !important;
+}
+
+/* ── Sidebar Profile & Active Indicator Dot ────────────────────────────── */
+.sb-profile-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: var(--radius-md);
+    background-color: #FFFFFF;
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    font-size: 14px;
+    margin-top: 6px;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+    transition: all 0.16s ease;
+}
+
+.sb-profile-row:hover {
+    border-color: var(--border-strong);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.sb-avatar-circle {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #5B61F6 0%, #8B5CF6 100%);
+    color: #FFFFFF;
+    font-weight: 700;
+    font-size: 13.5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 2px 6px rgba(91, 97, 246, 0.25);
+}
+
+.sb-profile-text {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.sb-profile-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sb-profile-email {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sb-active-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background-color: var(--accent);
+    display: inline-block;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(91, 97, 246, 0.2);
+}
+
+.chat-turn-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 4px;
+}
+
+.chat-ai-name {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+}
+
+.chat-user-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4F46E5 0%, #6366F1 100%);
+    color: #FFFFFF;
+    font-size: 11px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
 
 /* ── Responsive Breakpoints (Laptop, Tablet, Mobile) ────────────────────── */

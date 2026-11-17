@@ -104,9 +104,18 @@ class ConversationService:
         return ok
 
     def set_archived(self, thread_id: str, user_id: str, archived: bool) -> bool:
-        if self.repo is None:
-            return False
-        return self.repo.set_archived(thread_id, user_id, archived)
+        ok = False
+        try:
+            ok = self.memory.set_thread_archived(thread_id, user_id, archived)
+        except Exception:
+            pass
+        if self.repo is not None:
+            try:
+                repo_ok = self.repo.set_archived(thread_id, user_id, archived)
+                ok = ok or repo_ok
+            except Exception:
+                pass
+        return ok
 
     def delete_thread(self, thread_id: str, user_id: str) -> bool:
         ok = self.memory.delete_thread(thread_id=thread_id, user_id=user_id)

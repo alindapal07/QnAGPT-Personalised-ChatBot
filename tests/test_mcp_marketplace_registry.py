@@ -9,12 +9,12 @@ from unittest.mock import patch
 import pytest
 
 from qna_bot.database.connection import DatabaseManager
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.exceptions import MCPSecurityError
-from qna_bot.mcp.registry.base import CachedRegistryHTTPClient, RegistryRateLimitError
-from qna_bot.mcp.registry.glama_provider import GlamaRegistryProvider
-from qna_bot.mcp.registry.official_provider import OfficialMCPRegistryProvider
-from qna_bot.mcp.registry.service import MCPRegistryService
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.exceptions import MCPSecurityError
+from qna_bot.mcp_client.registry.base import CachedRegistryHTTPClient, RegistryRateLimitError
+from qna_bot.mcp_client.registry.glama_provider import GlamaRegistryProvider
+from qna_bot.mcp_client.registry.official_provider import OfficialMCPRegistryProvider
+from qna_bot.mcp_client.registry.service import MCPRegistryService
 from qna_bot.services.mcp_service import MCPService
 
 
@@ -132,7 +132,7 @@ def test_official_and_glama_registry_discovery_search_filter_and_caching(tmp_pat
         reg_svc.glama = GlamaRegistryProvider(http_client=http, api_key="glama_test_key")
 
         with patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
         ):
             page1 = reg_svc.discover(source="all")
@@ -186,7 +186,7 @@ def test_registry_handles_rate_limit_and_api_errors_gracefully(tmp_path: Path) -
         http = CachedRegistryHTTPClient(transport=_rate_limited)
         official = OfficialMCPRegistryProvider(http_client=http)
         with patch(
-            "qna_bot.mcp.security.socket.getaddrinfo",
+            "qna_bot.mcp_client.security.socket.getaddrinfo",
             return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
         ):
             with pytest.raises(RegistryRateLimitError):

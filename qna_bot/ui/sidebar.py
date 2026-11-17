@@ -15,12 +15,14 @@ from qna_bot.services.conversation_service import ConversationService
 from qna_bot.services.document_service import DocumentService
 from qna_bot.services.mcp_service import MCPService
 from qna_bot.services.session_service import restore_chat
-from qna_bot.ui.design_system import BRAND_SVG, render_html
+from qna_bot.ui.conversation_history import ConversationHistory
+from qna_bot.ui.design_system import BRAND_AI_SPARK_SVG, BRAND_SVG, render_html
 
 WORKSPACE_PAGES = (
     "Chat",
     "Agent Workspace",
     "Knowledge Base",
+    "Approvals",
     "MCP Marketplace",
     "MCP Servers",
     "Tool Marketplace",
@@ -35,6 +37,7 @@ NAV_GROUPS: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
             ("Chat", ":material/chat:"),
             ("Agent Workspace", ":material/smart_toy:"),
             ("Knowledge Base", ":material/library_books:"),
+            ("Approvals", ":material/verified_user:"),
         ),
     ),
     (
@@ -73,6 +76,7 @@ def _render_navigation() -> str:
     active = str(st.session_state.get("active_page", "Chat"))
     if active not in WORKSPACE_PAGES:
         active = "Chat"
+        st.session_state["active_page"] = "Chat"
 
     for group_label, items in NAV_GROUPS:
         render_html(f'<div class="sb-section-label">{html.escape(group_label)}</div>')
@@ -87,7 +91,7 @@ def _render_navigation() -> str:
             ):
                 st.session_state.active_page = page
                 st.rerun()
-    return str(st.session_state.get("active_page", "Chat"))
+    return active
 
 
 def _render_grouped_conversations(
@@ -95,123 +99,15 @@ def _render_grouped_conversations(
     search_query: str,
     chat_service: Optional[ChatService],
     conv_service: Optional[ConversationService],
+    on_clear_chat: Optional[Callable[[], None]] = None,
 ) -> None:
-    render_html('<div class="sb-section-label">Conversations</div>')
-
-    if conv_service is not None:
-        try:
-            grouped = conv_service.list_threads_grouped(user_id=user_id, search_query=search_query)
-        except Exception as exc:
-            st.caption(f"History unavailable: {exc}")
-            grouped = {}
-    elif chat_service is not None:
-        try:
-            items = [
-                t
-                for t in chat_service.list_threads(user_id=user_id, search_query=search_query)
-                if t.get("message_count", 0) > 0
-            ]
-            grouped = {"Recent": items} if items else {}
-        except Exception:
-            grouped = {}
-    else:
-        recent = list(st.session_state.get("recent_chats") or [])
-        if search_query:
-            q = search_query.lower()
-            recent = [c for c in recent if q in str(c.get("title", "")).lower()]
-        grouped = {"Recent": recent} if recent else {}
-
-    if not grouped:
-        st.caption("No matching conversations." if search_query else "No saved conversations yet.")
-        return
-
-    active_thread_id = str(st.session_state.get("current_chat_id") or "")
-    try:
-        conv_box = st.container(height=250, border=False)
-    except TypeError:
-        conv_box = st.container()
-
-    with conv_box:
-        for bucket, threads in grouped.items():
-            render_html(f'<div class="sb-bucket-label">{html.escape(bucket)}</div>')
-            for chat in threads[:15]:
-                tid = str(chat.get("id") or chat.get("thread_id", ""))
-                full_title = str(chat.get("title", "Conversation") or "Conversation").strip()
-                pinned = bool(chat.get("is_pinned", False))
-                is_current = tid == active_thread_id
-
-                col_open, col_menu = st.columns([5.2, 1])
-                with col_open:
-                    if st.button(
-                        full_title,
-                        key=f"restore_{tid}",
-                        type="secondary" if is_current else "tertiary",
-                        icon=":material/keep:" if pinned else None,
-                        help=full_title,
-                        use_container_width=True,
-                    ):
-                        if conv_service is not None:
-                            msgs = conv_service.load_history(tid, user_id=user_id)
-                            restore_chat({"id": tid, "messages": msgs})
-                        elif chat_service is not None:
-                            msgs = chat_service.load_thread_history(tid, user_id=user_id)
-                            restore_chat({"id": tid, "messages": msgs})
-                        else:
-                            restore_chat(chat)
-                        st.session_state.active_page = "Chat"
-                        st.rerun()
-
-                with col_menu:
-                    if conv_service is not None:
-                        with st.popover("", icon=":material/more_horiz:", help=f"Actions for {full_title}", use_container_width=True):
-                            st.caption(full_title)
-                            if st.button(
-                                "Unpin" if pinned else "Pin",
-                                key=f"pin_{tid}",
-                                icon=":material/keep:",
-                                use_container_width=True,
-                            ):
-                                conv_service.set_pinned(tid, user_id=user_id, pinned=not pinned)
-                                st.rerun()
-
-                            new_name = st.text_input(
-                                "Rename conversation",
-                                value=full_title,
-                                key=f"rename_val_{tid}",
-                            )
-                            if st.button("Save Name", key=f"rename_btn_{tid}", use_container_width=True):
-                                if new_name.strip():
-                                    conv_service.rename_thread(tid, user_id=user_id, new_title=new_name.strip())
-                                    st.rerun()
-
-                            if st.session_state.get("delete_thread_id") != tid:
-                                if st.button(
-                                    "Delete",
-                                    key=f"del_ask_{tid}",
-                                    icon=":material/delete:",
-                                    use_container_width=True,
-                                ):
-                                    st.session_state.delete_thread_id = tid
-                                    st.rerun()
-                            else:
-                                st.warning("Delete permanently?")
-                                c_yes, c_no = st.columns(2)
-                                with c_yes:
-                                    if st.button(
-                                        "Delete",
-                                        type="primary",
-                                        key=f"del_confirm_{tid}",
-                                        use_container_width=True,
-                                    ):
-                                        conv_service.delete_thread(tid, user_id=user_id)
-                                        st.session_state.delete_thread_id = None
-                                        if st.session_state.get("current_chat_id") == tid:
-                                            st.session_state.messages = []
-                                        st.rerun()
-                                with c_no:
-                                    if st.button("Cancel", key=f"del_cancel_{tid}", use_container_width=True):
-                                        st.session_state.delete_thread_id = None
-                                        st.rerun()
+    ConversationHistory(
+        user_id=user_id,
+        search_query=search_query,
+        chat_service=chat_service,
+        conv_service=conv_service,
+        on_clear_chat=on_clear_chat,
+    )
 
 
 def render_sidebar(
@@ -241,13 +137,73 @@ def render_sidebar(
     with st.sidebar:
         render_html(
             f'<div class="sb-brand-row">'
-            f'<div class="sb-brand-left">{BRAND_SVG}<span class="sb-brand">QnAGPT</span></div>'
-            f'<span class="sb-badge">Workspace</span>'
+            f'<div class="sb-brand-left">{BRAND_AI_SPARK_SVG}<span class="sb-brand">QnAGPT</span></div>'
+            f'<span class="sb-badge">Pro Workspace</span>'
             f"</div>"
         )
 
+        col_new, col_find = st.columns([4.2, 1.2])
+        with col_new:
+            if st.button(
+                "New chat",
+                type="primary",
+                icon=":material/add:",
+                key="sb_new_chat_btn",
+                use_container_width=True,
+            ):
+                st.session_state.active_page = "Chat"
+                on_new_chat()
+        with col_find:
+            if st.button(
+                "",
+                type="secondary",
+                icon=":material/search:",
+                key="sb_toggle_search",
+                help="Search conversations",
+                use_container_width=True,
+            ):
+                st.session_state["show_sb_search"] = not st.session_state.get("show_sb_search", False)
+                st.rerun()
+
+        if st.session_state.get("show_sb_search") or st.session_state.get("search_query"):
+            search_query = st.text_input(
+                "Search Conversations",
+                placeholder="Search conversations...",
+                label_visibility="collapsed",
+                key="sb_search_input",
+            )
+            st.session_state.search_query = search_query.strip()
+        else:
+            st.session_state.search_query = ""
+
+        _render_grouped_conversations(
+            user_id=active_user_id,
+            search_query=st.session_state.search_query,
+            chat_service=chat_service,
+            conv_service=conversation_service,
+            on_clear_chat=on_clear_chat,
+        )
+
+        render_html('<hr class="sb-divider"/>')
+        active_page = _render_navigation()
+
+        render_html('<hr class="sb-divider"/>')
+
+        avatar_letter = (authenticated_user.full_name or authenticated_user.email or "U")[0].upper() if authenticated_user else "U"
+        email_display = authenticated_user.email if authenticated_user else "Local Session"
+
+        render_html(
+            f'<div class="sb-profile-row">'
+            f'<div class="sb-avatar-circle">{html.escape(avatar_letter)}</div>'
+            f'<div class="sb-profile-text">'
+            f'<div class="sb-profile-name">{html.escape(display_identity)}</div>'
+            f'<div class="sb-profile-email">{html.escape(email_display)}</div>'
+            f'</div>'
+            f'</div>'
+        )
+
         if authenticated_user is not None:
-            with st.popover(f"{display_identity}", icon=":material/account_circle:", use_container_width=True):
+            with st.popover("Account & Sign Out", icon=":material/account_circle:", use_container_width=True):
                 st.caption(f"Signed in as `{authenticated_user.email}`")
                 c_acc, c_out = st.columns(2)
                 with c_acc:
@@ -260,29 +216,6 @@ def render_sidebar(
                             on_sign_out()
                         st.rerun()
 
-        if st.button("New Chat", type="primary", icon=":material/add:", use_container_width=True):
-            st.session_state.active_page = "Chat"
-            on_new_chat()
-
-        search_query = st.text_input(
-            "Search Conversations",
-            placeholder="Search conversations...",
-            label_visibility="collapsed",
-            key="sb_search_input",
-        )
-        st.session_state.search_query = search_query.strip()
-
-        active_page = _render_navigation()
-
-        render_html('<hr class="sb-divider"/>')
-        _render_grouped_conversations(
-            user_id=active_user_id,
-            search_query=st.session_state.search_query,
-            chat_service=chat_service,
-            conv_service=conversation_service,
-        )
-
-        render_html('<hr class="sb-divider"/>')
         mcp_summary = ""
         if mcp_service is not None:
             try:
@@ -309,7 +242,6 @@ def render_sidebar(
             f'<div class="sb-footer-card">'
             f'<div class="sb-status"><span class="{dot_cls}"></span>{html.escape(status_label)}</div>'
             f"{meta_html}"
-            f'<div class="sb-user-pill">Account: <strong>{html.escape(display_identity)}</strong></div>'
             f"</div>"
         )
 

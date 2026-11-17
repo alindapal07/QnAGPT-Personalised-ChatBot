@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 import re
 from typing import List, Literal, Optional, Sequence
-
+import os
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 
@@ -63,7 +63,7 @@ class DocumentGrader:
     ) -> None:
         self.settings = settings or get_settings()
         self.model_name = model_name or self.settings.default_text_model
-        self.api_key = (api_key if api_key is not None else self.settings.groq_api_key).strip()
+        self.api_key = (api_key if api_key is not None else self.settings.groq_api_key).strip() or  os.getenv("GROQ_API_EY")
         self.score_threshold = (
             score_threshold
             if score_threshold is not None
@@ -75,7 +75,7 @@ class DocumentGrader:
             model=self.model_name,
             temperature=0.0,
             max_tokens=512,
-            
+            # api_key=self.api_key
         )
 
     def grade(

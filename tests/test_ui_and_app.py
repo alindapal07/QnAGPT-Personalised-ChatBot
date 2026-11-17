@@ -179,7 +179,7 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
             "import sys; "
             f"sys.path.insert(0, {str(pkg_dir)!r}); "
             "from qna_bot.agent.approval import ApprovalManager; "
-            "from qna_bot.mcp.client_manager import MCPClientManager; "
+            "from qna_bot.mcp_client.client_manager import MCPClientManager; "
             "import mcp; "
             "print(mcp.__file__); "
             f"assert 'site-packages' in mcp.__file__ or {str(pkg_dir / 'mcp')!r} not in mcp.__file__"
@@ -196,10 +196,10 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
     def test_lazy_package_exports_resolve_cleanly(self) -> None:
         import qna_bot
         import qna_bot.agent
-        import qna_bot.mcp
+        import qna_bot.mcp_client
         import qna_bot.services
 
-        for pkg in (qna_bot, qna_bot.mcp, qna_bot.agent, qna_bot.services):
+        for pkg in (qna_bot, qna_bot.mcp_client, qna_bot.agent, qna_bot.services):
             for name in pkg.__all__:
                 self.assertTrue(hasattr(pkg, name), f"Missing export {name} on {pkg.__name__}")
 
@@ -258,7 +258,13 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
         app_path = str(Path(__file__).resolve().parent.parent / "qna_bot" / "app.py")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             prev_data_dir = os.environ.get("QNAGPT_DATA_DIR")
+            prev_qdrant_mode = os.environ.get("QDRANT_MODE")
+            prev_qdrant_url = os.environ.get("QDRANT_URL")
+            prev_qdrant_key = os.environ.get("QDRANT_API_KEY")
             os.environ["QNAGPT_DATA_DIR"] = tmp_dir
+            os.environ["QDRANT_MODE"] = "local"
+            os.environ["QDRANT_URL"] = "http://localhost:6333"
+            os.environ["QDRANT_API_KEY"] = ""
             get_settings.cache_clear()
             try:
                 at = AppTest.from_file(app_path, default_timeout=20)
@@ -276,21 +282,9 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
                 reg_submit.click().run()
                 self.assertFalse(at.exception, msg=f"Chat page exception after sign-up: {at.exception}")
 
-                for target_page in (
-                    "Agent Workspace",
-                    "Knowledge Base",
-                    "MCP Servers",
-                    "Tool Marketplace",
-                    "Account",
-                    "Settings",
-                ):
-                    nav_btn = next(b for b in at.sidebar.button if b.key == f"nav_page_{target_page}")
-                    nav_btn.click().run()
-                    self.assertFalse(at.exception, msg=f"{target_page} exception: {at.exception}")
-
-                # Verify MCP Marketplace with registry network patched safely
+                # Verify all workspace pages under deterministic mock without live registry network requests
                 with patch(
-                    "qna_bot.mcp.registry.service.MCPRegistryService.discover",
+                    "qna_bot.mcp_client.registry.service.MCPRegistryService.discover",
                     return_value=SimpleNamespace(
                         items=[],
                         attributions=[("Official MCP Registry", "https://registry.modelcontextprotocol.io")],
@@ -299,9 +293,34 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
                         next_cursor=None,
                     ),
                 ):
-                    mkt_btn = next(b for b in at.sidebar.button if b.key == "nav_page_MCP Marketplace")
-                    mkt_btn.click().run()
-                    self.assertFalse(at.exception, msg=f"MCP Marketplace exception: {at.exception}")
+                    for target_page in (
+                        "Agent Workspace",
+                        "Knowledge Base",
+                        "MCP Servers",
+                        "Tool Marketplace",
+                        "Account",
+                        "Settings",
+                        "MCP Marketplace",
+                    ):
+                        nav_btn = next(b for b in at.sidebar.button if b.key == f"nav_page_{target_page}")
+                        nav_btn.click().run()
+                        self.assertFalse(at.exception, msg=f"{target_page} exception: {at.exception}")
+
+                    # Navigate BACK to Chat to verify header and composer rendering
+                    chat_btn = next(b for b in at.sidebar.button if b.key == "nav_page_Chat")
+                    chat_btn.click().run()
+                    self.assertFalse(at.exception, msg=f"Return to Chat exception: {at.exception}")
+
+                    # Sign out from Account page to verify return to Auth gate
+                    acct_btn = next(b for b in at.sidebar.button if b.key == "nav_page_Account")
+                    acct_btn.click().run()
+                    self.assertFalse(at.exception, msg=f"Account nav exception before signout: {at.exception}")
+                    sign_out_btn = next((b for b in at.button if "Sign Out" in str(b.label)), None)
+                    if sign_out_btn is not None:
+                        sign_out_btn.click().run()
+                        self.assertFalse(at.exception, msg=f"Sign-out exception: {at.exception}")
+                        # Auth gate should be displayed again after sign out
+                        self.assertEqual([b for b in at.sidebar.button if str(b.key).startswith("nav_page_")], [])
             finally:
                 try:
                     import streamlit as st
@@ -317,7 +336,60 @@ class TestUIAssetsAndAppFlow(unittest.TestCase):
                     os.environ.pop("QNAGPT_DATA_DIR", None)
                 else:
                     os.environ["QNAGPT_DATA_DIR"] = prev_data_dir
+
+                if prev_qdrant_mode is None:
+                    os.environ.pop("QDRANT_MODE", None)
+                else:
+                    os.environ["QDRANT_MODE"] = prev_qdrant_mode
+
+                if prev_qdrant_url is None:
+                    os.environ.pop("QDRANT_URL", None)
+                else:
+                    os.environ["QDRANT_URL"] = prev_qdrant_url
+
+                if prev_qdrant_key is None:
+                    os.environ.pop("QDRANT_API_KEY", None)
+                else:
+                    os.environ["QDRANT_API_KEY"] = prev_qdrant_key
                 get_settings.cache_clear()
+
+    def test_navigation_fallback_for_invalid_active_page(self) -> None:
+        import streamlit as st
+        from qna_bot.ui.sidebar import _render_navigation, WORKSPACE_PAGES
+
+        # Mock st.session_state with an unrecognized page name
+        with patch.object(st, "session_state", {"active_page": "NonExistentPage"}):
+            with patch.object(st, "button", return_value=False):
+                resolved_page = _render_navigation()
+                self.assertEqual(resolved_page, "Chat")
+
+        # Test with empty string
+        with patch.object(st, "session_state", {"active_page": ""}):
+            with patch.object(st, "button", return_value=False):
+                resolved_page = _render_navigation()
+                self.assertEqual(resolved_page, "Chat")
+
+        # Test with None
+        with patch.object(st, "session_state", {}):
+            with patch.object(st, "button", return_value=False):
+                resolved_page = _render_navigation()
+                self.assertEqual(resolved_page, "Chat")
+
+    def test_render_header_accepts_all_workspace_titles_cleanly(self) -> None:
+        from qna_bot.ui.components import render_header
+        from qna_bot.config.settings import get_settings
+
+        settings = get_settings()
+        # Verify render_header executes without error for Chat and other page titles
+        for page_name in ("Chat", "Agent Workspace", "Knowledge Base", "MCP Servers", "Settings"):
+            render_header(
+                model_name="llama-3.3-70b-versatile",
+                chat_mode="Auto (Agentic)",
+                page_title=page_name,
+                conversation_title="Active Conversation",
+                settings=settings,
+            )
+
 
 
 if __name__ == "__main__":

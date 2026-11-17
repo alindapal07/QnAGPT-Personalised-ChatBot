@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+import uuid
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
@@ -256,7 +257,9 @@ class FAISSVectorStoreManager(VectorStoreBackend):
             raise VectorStoreError("No document chunks provided for indexing.")
 
         with self._lock:
-            doc_id = str(document_meta["document_id"])
+            doc_id = str(document_meta.get("document_id") or f"doc_{uuid.uuid4().hex[:12]}")
+            source_name = str(document_meta.get("filename") or document_meta.get("source") or "document")
+            file_hash = str(document_meta.get("file_hash") or "")
             chunk_ids = [
                 str(doc.metadata.get("chunk_id") or f"{doc_id}:{idx}")
                 for idx, doc in enumerate(documents)
@@ -281,9 +284,9 @@ class FAISSVectorStoreManager(VectorStoreBackend):
 
             manifest.setdefault("documents", {})[doc_id] = {
                 "document_id": doc_id,
-                "filename": document_meta["filename"],
-                "file_hash": document_meta["file_hash"],
-                "file_type": document_meta.get("file_type", ""),
+                "filename": source_name,
+                "file_hash": file_hash,
+                "file_type": str(document_meta.get("file_type", "")),
                 "chunk_count": len(chunk_ids),
                 "page_count": document_meta.get("page_count"),
                 "chunk_ids": chunk_ids,
@@ -337,6 +340,7 @@ class FAISSVectorStoreManager(VectorStoreBackend):
         cleaned_query = (query or "").strip()
         if not cleaned_query or top_k <= 0:
             return []
+        clamped_k = min(top_k, 100)
 
         with self._lock:
             store = self.load_vector_store(user_id)
@@ -353,15 +357,15 @@ class FAISSVectorStoreManager(VectorStoreBackend):
                 if use_mmr:
                     mmr_docs = store.max_marginal_relevance_search(
                         cleaned_query,
-                        k=top_k,
-                        fetch_k=max(top_k * 3, 12),
+                        k=clamped_k,
+                        fetch_k=max(clamped_k * 3, 12),
                         filter=combined_filter,
                     )
                     scored_lookup = {
                         doc.metadata.get("chunk_id"): max(0.0, min(1.0, 1.0 - float(dist) / 2.0))
                         for doc, dist in store.similarity_search_with_score(
                             cleaned_query,
-                            k=max(top_k * 3, 12),
+                            k=max(clamped_k * 3, 12),
                             filter=combined_filter,
                         )
                     }
@@ -372,7 +376,7 @@ class FAISSVectorStoreManager(VectorStoreBackend):
                 else:
                     raw_pairs = store.similarity_search_with_score(
                         cleaned_query,
-                        k=top_k,
+                        k=clamped_k,
                         filter=combined_filter,
                     )
                     pairs = [

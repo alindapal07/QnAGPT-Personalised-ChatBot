@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 import os
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from dotenv import dotenv_values
 
@@ -153,8 +153,17 @@ class AppSettings:
     app_base_url: str = "http://localhost:8501"
     google_client_id: str = ""
     google_client_secret: str = ""
+    google_redirect_uri: str = ""
     github_client_id: str = ""
     github_client_secret: str = ""
+    github_redirect_uri: str = ""
+
+    # Authentication Rate Limiting & Proxy Configuration
+    auth_rate_limit_max_attempts: int = 5
+    auth_rate_limit_window_sec: float = 300.0
+    auth_rate_limit_client_max_attempts: int = 20
+    auth_rate_limit_registration_max_attempts: int = 10
+    trusted_proxies: str = ""
 
     # MCP Marketplace Registry & Credential Vault defaults
     official_registry_url: str = "https://registry.modelcontextprotocol.io"
@@ -163,6 +172,36 @@ class AppSettings:
     credential_encryption_key: str = ""
     oauth_redirect_uri: str = "http://localhost:8501/oauth/callback"
     registry_cache_ttl_sec: int = 300
+    environment: str = "development"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("production", "prod")
+
+    def validate_production_secrets(self) -> None:
+        """Validate that all required security-sensitive secrets are explicitly provided in production."""
+        if not self.is_production:
+            return
+        missing: list[str] = []
+        if not self.groq_api_key or any(
+            p in self.groq_api_key.lower()
+            for p in ("your_groq", "placeholder", "test_key", "dummy")
+        ):
+            missing.append("GROQ_API_KEY")
+        if not self.session_secret_key:
+            missing.append("SESSION_SECRET_KEY")
+        if not self.credential_encryption_key:
+            missing.append("QNAGPT_CREDENTIAL_KEY")
+        if self.google_client_id and not self.google_client_secret:
+            missing.append("GOOGLE_CLIENT_SECRET")
+        if self.github_client_id and not self.github_client_secret:
+            missing.append("GITHUB_CLIENT_SECRET")
+        if missing:
+            from qna_bot.core.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                f"Production deployment requires explicit secret configuration. Missing or invalid required secrets: {', '.join(missing)}"
+            )
 
     @property
     def resolved_database_url(self) -> str:
@@ -172,16 +211,47 @@ class AppSettings:
 
 
 def _read_config_value(key: str, default: str = "") -> str:
+    """Read configuration value prioritizing OS environment variables, then Streamlit secrets, then default."""
     val = os.getenv(key, "").strip()
     return val if val else (_read_streamlit_secret(key) or default)
 
 
+def _read_int(key: str, default: int, min_val: Optional[int] = None) -> int:
+    """Safely parse an integer environment variable with fallback and optional minimum bound."""
+    raw = _read_config_value(key, str(default))
+    try:
+        val = int(raw)
+        return max(min_val, val) if min_val is not None else val
+    except ValueError:
+        return default
+
+
+def _read_float(key: str, default: float) -> float:
+    """Safely parse a floating-point environment variable with fallback."""
+    raw = _read_config_value(key, str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _read_bool(key: str, default: bool = True) -> bool:
+    """Safely parse boolean flags from common truthy/falsy environment strings."""
+    raw = _read_config_value(key, "true" if default else "false").lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def load_settings() -> AppSettings:
-    """Load environment files / secrets and construct a fresh AppSettings instance."""
+    """Load environment files, resolve storage paths, and construct an AppSettings instance."""
     _load_environment_files()
+
     api_key = _read_config_value("GROQ_API_KEY")
+
+    # Resolve application storage directories
+    # If QNAGPT_DATA_DIR is provided, place SQLite and local vector store inside it.
     raw_data_dir = os.getenv("QNAGPT_DATA_DIR", "").strip()
     data_dir = Path(raw_data_dir) if raw_data_dir else (PROJECT_ROOT / "data")
+
     raw_storage_dir = os.getenv("QNAGPT_STORAGE_DIR", "").strip()
     if raw_storage_dir:
         storage_dir = Path(raw_storage_dir)
@@ -194,22 +264,19 @@ def load_settings() -> AppSettings:
     raw_checkpoint_db = os.getenv("LANGGRAPH_CHECKPOINT_DB", "").strip()
     checkpoint_db_path = Path(raw_checkpoint_db) if raw_checkpoint_db else sqlite_db_path
 
+    # MCP Marketplace and credential vault settings
     glama_key = _read_config_value("GLAMA_API_KEY")
     cred_key = _read_config_value("QNAGPT_CREDENTIAL_KEY")
     session_secret = _read_config_value("SESSION_SECRET_KEY")
 
-    try:
-        cache_ttl = int(os.getenv("QNAGPT_REGISTRY_CACHE_TTL_SEC", "300"))
-    except ValueError:
-        cache_ttl = 300
-    try:
-        session_ttl_hours = max(1, int(os.getenv("SESSION_TTL_HOURS", "168")))
-    except ValueError:
-        session_ttl_hours = 168
+    cache_ttl = _read_int("QNAGPT_REGISTRY_CACHE_TTL_SEC", default=300, min_val=30)
+    session_ttl_hours = _read_int("SESSION_TTL_HOURS", default=168, min_val=1)
 
+    # Resolve Qdrant vector database configuration
     qdrant_url = _read_config_value("QDRANT_URL", "http://localhost:6333")
     qdrant_api_key = _read_config_value("QDRANT_API_KEY")
     raw_qdrant_mode = _read_config_value("QDRANT_MODE").lower()
+
     if raw_qdrant_mode in ("local", "cloud"):
         qdrant_mode = raw_qdrant_mode
     elif qdrant_api_key or "cloud.qdrant.io" in qdrant_url.lower():
@@ -217,44 +284,16 @@ def load_settings() -> AppSettings:
     else:
         qdrant_mode = "local"
 
-    crag_enabled_raw = _read_config_value("CRAG_ENABLED", "true").lower()
-    crag_enabled = crag_enabled_raw not in ("0", "false", "no", "off")
-
-    try:
-        crag_rel_thresh = float(_read_config_value("CRAG_RELEVANCE_THRESHOLD", "0.70"))
-    except ValueError:
-        crag_rel_thresh = 0.70
-
-    try:
-        crag_conf_thresh = float(_read_config_value("CRAG_CONFIDENCE_THRESHOLD", "0.70"))
-    except ValueError:
-        crag_conf_thresh = 0.70
-
-    try:
-        crag_cov_thresh = float(_read_config_value("CRAG_COVERAGE_THRESHOLD", "0.65"))
-    except ValueError:
-        crag_cov_thresh = 0.65
-
-    try:
-        crag_max_retrievals = max(1, int(_read_config_value("CRAG_MAX_RETRIEVAL_ATTEMPTS", "2")))
-    except ValueError:
-        crag_max_retrievals = 2
-
-    try:
-        crag_max_rewrites = max(1, int(_read_config_value("CRAG_MAX_REWRITE_ATTEMPTS", "2")))
-    except ValueError:
-        crag_max_rewrites = 2
-
-    try:
-        crag_max_web = max(0, int(_read_config_value("CRAG_MAX_WEB_SEARCH_ATTEMPTS", "1")))
-    except ValueError:
-        crag_max_web = 1
-
-    crag_web_raw = _read_config_value("CRAG_WEB_FALLBACK_ENABLED", "true").lower()
-    crag_web_fallback = crag_web_raw not in ("0", "false", "no", "off")
-
-    crag_abs_raw = _read_config_value("CRAG_ABSTENTION_ENABLED", "true").lower()
-    crag_abstention = crag_abs_raw not in ("0", "false", "no", "off")
+    # Corrective RAG (CRAG) configuration
+    crag_enabled = _read_bool("CRAG_ENABLED", default=True)
+    crag_rel_thresh = _read_float("CRAG_RELEVANCE_THRESHOLD", 0.70)
+    crag_conf_thresh = _read_float("CRAG_CONFIDENCE_THRESHOLD", 0.70)
+    crag_cov_thresh = _read_float("CRAG_COVERAGE_THRESHOLD", 0.65)
+    crag_max_retrievals = _read_int("CRAG_MAX_RETRIEVAL_ATTEMPTS", default=2, min_val=1)
+    crag_max_rewrites = _read_int("CRAG_MAX_REWRITE_ATTEMPTS", default=2, min_val=1)
+    crag_max_web = _read_int("CRAG_MAX_WEB_SEARCH_ATTEMPTS", default=1, min_val=0)
+    crag_web_fallback = _read_bool("CRAG_WEB_FALLBACK_ENABLED", default=True)
+    crag_abstention = _read_bool("CRAG_ABSTENTION_ENABLED", default=True)
 
     return AppSettings(
         groq_api_key=api_key,
@@ -283,8 +322,10 @@ def load_settings() -> AppSettings:
         app_base_url=_read_config_value("APP_BASE_URL", "http://localhost:8501"),
         google_client_id=_read_config_value("GOOGLE_CLIENT_ID"),
         google_client_secret=_read_config_value("GOOGLE_CLIENT_SECRET"),
+        google_redirect_uri=_read_config_value("GOOGLE_REDIRECT_URI"),
         github_client_id=_read_config_value("GITHUB_CLIENT_ID"),
         github_client_secret=_read_config_value("GITHUB_CLIENT_SECRET"),
+        github_redirect_uri=_read_config_value("GITHUB_REDIRECT_URI"),
         official_registry_url=_read_config_value(
             "MCP_REGISTRY_URL", "https://registry.modelcontextprotocol.io"
         ),
@@ -294,7 +335,17 @@ def load_settings() -> AppSettings:
         oauth_redirect_uri=_read_config_value(
             "QNAGPT_OAUTH_REDIRECT_URI", "http://localhost:8501/oauth/callback"
         ),
-        registry_cache_ttl_sec=max(30, cache_ttl),
+        registry_cache_ttl_sec=cache_ttl,
+        auth_rate_limit_max_attempts=int(_read_config_value("QNAGPT_AUTH_RATE_LIMIT_MAX_ATTEMPTS", "5")),
+        auth_rate_limit_window_sec=float(_read_config_value("QNAGPT_AUTH_RATE_LIMIT_WINDOW_SEC", "300.0")),
+        auth_rate_limit_client_max_attempts=int(
+            _read_config_value("QNAGPT_AUTH_RATE_LIMIT_CLIENT_MAX_ATTEMPTS", "20")
+        ),
+        auth_rate_limit_registration_max_attempts=int(
+            _read_config_value("QNAGPT_AUTH_RATE_LIMIT_REGISTRATION_MAX_ATTEMPTS", "10")
+        ),
+        trusted_proxies=_read_config_value("QNAGPT_TRUSTED_PROXIES", ""),
+        environment=_read_config_value("APP_ENV", _read_config_value("ENVIRONMENT", "development")),
     )
 
 

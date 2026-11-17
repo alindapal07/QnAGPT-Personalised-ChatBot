@@ -2,12 +2,23 @@
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import hmac
 import os
 from pathlib import Path
 import secrets
 from typing import Any, Callable, Dict, Optional
 
 from authlib.integrations.httpx_client import OAuth2Client
+from authlib.jose import JsonWebKey, jwt
+from authlib.jose.errors import (
+    BadSignatureError,
+    DecodeError,
+    ExpiredTokenError,
+    InvalidClaimError,
+    JoseError,
+    UnsupportedAlgorithmError,
+)
+import httpx
 
 from qna_bot.config.settings import AppSettings, get_settings
 from qna_bot.core.exceptions import AuthenticationError, ConfigurationError, SecurityError
@@ -16,9 +27,12 @@ from qna_bot.core.security import (
     SlidingWindowRateLimiter,
     generate_csrf_token,
     generate_session_token,
+    get_dummy_password_hash,
     hash_password,
     hash_session_token,
+    normalize_client_identifier,
     normalize_email,
+    restrict_file_permissions,
     validate_password_strength,
     verify_password,
 )
@@ -58,6 +72,9 @@ _OAUTH_PROVIDERS: Dict[str, Dict[str, str]] = {
     },
 }
 
+_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"]
+
 
 def _to_user_profile(user: User) -> UserProfile:
     return UserProfile(
@@ -89,15 +106,35 @@ class AuthService:
         settings: Optional[AppSettings] = None,
         rate_limiter: Optional[SlidingWindowRateLimiter] = None,
         oauth_client_factory: Optional[Callable[..., Any]] = None,
+        google_jwks: Optional[Any] = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.db = db or SQLAlchemyDatabase(self.settings.resolved_database_url)
         self.users = UserRepository(self.db)
         self.auth = AuthRepository(self.db)
         self.audit = AuditAndTelemetryRepository(self.db)
-        self.rate_limiter = rate_limiter or SlidingWindowRateLimiter(max_attempts=5, window_sec=300.0)
+        max_attempts = int(getattr(self.settings, "auth_rate_limit_max_attempts", 5))
+        window_sec = float(getattr(self.settings, "auth_rate_limit_window_sec", 300.0))
+        self.rate_limiter = rate_limiter or SlidingWindowRateLimiter(
+            max_attempts=max_attempts,
+            window_sec=window_sec,
+        )
         self._oauth_client_factory = oauth_client_factory or OAuth2Client
+        self._google_jwks = google_jwks
         self._session_secret = self._resolve_session_secret()
+
+    def _check_rate_limit(self, key: str, max_attempts: Optional[int] = None) -> None:
+        """Safely invoke rate limiter check_allowed with backward-compatible argument handling."""
+        if not self.rate_limiter:
+            return
+        try:
+            if max_attempts is not None:
+                self.rate_limiter.check_allowed(key, max_attempts=max_attempts)
+            else:
+                self.rate_limiter.check_allowed(key)
+        except TypeError:
+            # Fallback for rate limiter instances or mocks accepting only `key`
+            self.rate_limiter.check_allowed(key)
 
     def _resolve_session_secret(self) -> str:
         explicit = (self.settings.session_secret_key or "").strip()
@@ -109,15 +146,13 @@ class AuthService:
         if key_path.is_file():
             existing = key_path.read_text(encoding="utf-8").strip()
             if existing:
+                restrict_file_permissions(key_path)
                 return existing
         generated = secrets.token_urlsafe(48)
         try:
             key_path.parent.mkdir(parents=True, exist_ok=True)
             key_path.write_text(generated, encoding="utf-8")
-            try:
-                os.chmod(key_path, 0o600)
-            except OSError:
-                pass
+            restrict_file_permissions(key_path)
         except OSError as exc:
             logger.warning("Could not persist .session.key file: %s", exc)
         return generated
@@ -165,13 +200,33 @@ class AuthService:
         email: str,
         password: str,
         full_name: str = "",
+        client_key: str = "local",
     ) -> AuthResult:
-        """Create a new local password account with Argon2id hashing."""
+        """Create a new local password account with Argon2id hashing under rate limits."""
+        norm_client = normalize_client_identifier(client_key)
+        reg_key = f"reg:{norm_client}"
+        reg_max_attempts = int(getattr(self.settings, "auth_rate_limit_registration_max_attempts", 10))
+        self._check_rate_limit(
+            reg_key,
+            max_attempts=reg_max_attempts,
+        )
+
         norm_email = normalize_email(email)
         validate_password_strength(password)
 
-        if self.users.get_by_email(norm_email) is not None:
-            raise AuthenticationError("An account with this email already exists.")
+        existing_user = self.users.get_by_email(norm_email)
+        if existing_user is not None:
+            self.rate_limiter.record_failure(reg_key)
+            self.audit.log_audit(
+                user_id=existing_user.id,
+                action="auth.register_duplicate_attempt",
+                resource_type="user",
+                resource_id=norm_email,
+                metadata={"method": "password", "client": norm_client},
+            )
+            raise AuthenticationError(
+                "Registration could not be completed with this email address. If you already have an account, please sign in."
+            )
 
         pw_hash = hash_password(password)
         user = self.users.create_user(
@@ -180,13 +235,14 @@ class AuthService:
             full_name=(full_name or norm_email.split("@")[0]).strip()[:160],
             is_verified=False,
         )
+        self.rate_limiter.record_failure(reg_key)
         self._ensure_default_settings(user.id)
         self.audit.log_audit(
             user_id=user.id,
             action="auth.register",
             resource_type="user",
             resource_id=user.id,
-            metadata={"method": "password"},
+            metadata={"method": "password", "client": norm_client},
         )
         return self._issue_session(user, is_new_user=True)
 
@@ -196,35 +252,92 @@ class AuthService:
         password: str,
         client_key: str = "local",
     ) -> AuthResult:
-        """Verify email + Argon2id password under sliding-window rate limits."""
+        """Verify email + Argon2id password under multi-dimensional rate limits.
+
+        Enforces separate thresholds for:
+        1. Client-Account pair limits: caps attempts by this client on this account (e.g. 5 failures / window)
+        2. Client-wide limits: caps total failures across all accounts from this client (e.g. 20 failures / window)
+        3. Fair account protection: tracks global account failure volume without locking out the legitimate owner
+           who supplies the correct password.
+
+        Performs constant-work password verification for all authentication requests
+        (including nonexistent users, inactive accounts, and passwordless accounts)
+        using a valid dummy Argon2id hash to mitigate password timing attacks and
+        account enumeration.
+        """
         raw_email = (email or "").strip().lower()
-        rate_key = f"pw:{raw_email or 'empty'}:{client_key}"
-        self.rate_limiter.check_allowed(rate_key)
+        norm_client = normalize_client_identifier(client_key)
+        client_tag = f"client:{norm_client}"
+        pair_key = f"pair:{norm_client}:{raw_email or 'empty'}"
+        legacy_key = f"pw:{raw_email or 'empty'}:{client_key}"
+
+        # Dimension A: Check client-wide failure threshold (blocks credential stuffing across accounts)
+        client_max_attempts = int(getattr(self.settings, "auth_rate_limit_client_max_attempts", 20))
+        self._check_rate_limit(
+            client_tag,
+            max_attempts=client_max_attempts,
+        )
+
+        # Dimension B: Check client-account pair threshold (blocks targeted guessing from this client)
+        pair_max_attempts = int(getattr(self.settings, "auth_rate_limit_max_attempts", 5))
+        self._check_rate_limit(
+            pair_key,
+            max_attempts=pair_max_attempts,
+        )
+
+        # Dimension C: Check legacy rate key for backwards compatibility
+        self._check_rate_limit(legacy_key)
+
+        dummy_hash = get_dummy_password_hash()
 
         try:
             norm_email = normalize_email(raw_email)
         except AuthenticationError:
-            self.rate_limiter.record_failure(rate_key)
+            verify_password(password or "dummy", dummy_hash)
+            self.rate_limiter.record_failure(client_tag)
+            self.rate_limiter.record_failure(pair_key)
+            self.rate_limiter.record_failure(legacy_key)
             raise AuthenticationError("Invalid email or password.")
 
         user = self.users.get_by_email(norm_email)
-        if (
-            user is None
-            or not user.is_active
-            or not user.password_hash
-            or not verify_password(password, user.password_hash)
-        ):
-            self.rate_limiter.record_failure(rate_key)
+
+        # Only an existing active account with an established password hash can be authenticated
+        is_real_candidate = (
+            user is not None
+            and user.is_active
+            and bool(user.password_hash)
+        )
+
+        if is_real_candidate:
+            is_valid_pw = verify_password(password, user.password_hash)
+        else:
+            # Execute dummy verification to equalize computational workload across invalid categories
+            verify_password(password or "dummy", dummy_hash)
+            is_valid_pw = False
+
+        if not is_real_candidate or not is_valid_pw:
+            self.rate_limiter.record_failure(client_tag)
+            self.rate_limiter.record_failure(pair_key)
+            self.rate_limiter.record_failure(legacy_key)
+            acct_fails = self.rate_limiter.record_failure(f"acct:{norm_email}")
+            if isinstance(acct_fails, (int, float)) and acct_fails >= 10:
+                logger.warning(
+                    "High authentication failure volume on account %s (%d failures in active window).",
+                    norm_email,
+                    acct_fails,
+                )
             self.audit.log_audit(
                 user_id=user.id if user else None,
                 action="auth.login_failed",
                 resource_type="user",
                 resource_id=norm_email,
-                metadata={"client": client_key},
+                metadata={"client": norm_client},
             )
             raise AuthenticationError("Invalid email or password.")
 
-        self.rate_limiter.clear(rate_key)
+        # Successful authentication: clear client-account failure counters
+        self.rate_limiter.clear(pair_key)
+        self.rate_limiter.clear(legacy_key)
         self._ensure_default_settings(user.id)
         self.audit.log_audit(
             user_id=user.id,
@@ -301,9 +414,26 @@ class AuthService:
         except ConfigurationError:
             return False
 
+    def resolve_provider_from_state(self, state: str) -> Optional[str]:
+        """Resolve the registered OAuth provider for an active pending CSRF state token."""
+        if not state:
+            return None
+        pending = self.auth.get_pending_state(state)
+        return pending.provider if pending else None
+
     def oauth_redirect_uri(self, provider: str) -> str:
+        prov = (provider or "").strip().lower()
+        if prov == "google" and getattr(self.settings, "google_redirect_uri", ""):
+            return self.settings.google_redirect_uri.strip()
+        if prov == "github" and getattr(self.settings, "github_redirect_uri", ""):
+            return self.settings.github_redirect_uri.strip()
+
         base = (self.settings.app_base_url or "http://localhost:8501").rstrip("/")
-        return f"{base}/?oauth_provider={provider.lower()}"
+        # Google OAuth strictly forbids query parameters in Authorized redirect URIs in Google Cloud Console.
+        # Google OAuth callbacks must route to the root URL (e.g. http://localhost:8501/).
+        if prov == "google":
+            return f"{base}/"
+        return f"{base}/?oauth_provider={prov}"
 
     def start_oauth_login(self, provider: str) -> OAuthStartResult:
         """Build a real Authlib OAuth2/PKCE authorization URL and persist single-use CSRF state."""
@@ -357,6 +487,10 @@ class AuthService:
     ) -> AuthResult:
         """Validate single-use CSRF state, exchange code server-side via Authlib, and create user session."""
         prov = (provider or "").strip().lower()
+        if not prov and state:
+            resolved = self.resolve_provider_from_state(state)
+            if resolved:
+                prov = resolved
         meta = _OAUTH_PROVIDERS.get(prov)
         if meta is None:
             raise ConfigurationError(f"Unsupported OAuth provider '{provider}'.")
@@ -381,19 +515,38 @@ class AuthService:
                 "code_verifier": pending.code_verifier,
             }
             if prov == "github":
-                client.fetch_token(**token_kwargs, headers={"Accept": "application/json"})
+                token = client.fetch_token(**token_kwargs, headers={"Accept": "application/json"})
             else:
-                client.fetch_token(**token_kwargs)
+                token = client.fetch_token(**token_kwargs)
         except Exception as exc:
             logger.warning("OAuth token exchange failed for provider=%s: %s", prov, exc)
             raise AuthenticationError(f"Failed to complete {prov.title()} authentication: {exc}") from exc
 
-        profile = self._fetch_oauth_userinfo(prov, client, meta)
-        sub = str(profile["sub"])
-        email = normalize_email(profile["email"])
-        email_verified = bool(profile["email_verified"])
-        full_name = str(profile.get("name") or email.split("@")[0])[:160]
-        avatar_url = str(profile.get("avatar_url") or "")[:512]
+        if not isinstance(token, dict):
+            raise AuthenticationError(f"{prov.title()} token response was invalid.")
+
+        if prov == "google":
+            raw_id_token = token.get("id_token")
+            if not raw_id_token:
+                raise AuthenticationError("Google OAuth code exchange did not return an ID token.")
+
+            claims = self._validate_google_id_token(
+                raw_id_token=raw_id_token,
+                expected_nonce=pending.nonce,
+                client_id=client_id,
+            )
+            sub = str(claims.get("sub") or "").strip()
+            email = normalize_email(str(claims.get("email") or ""))
+            email_verified = bool(claims.get("email_verified", False))
+            full_name = str(claims.get("name") or email.split("@")[0])[:160]
+            avatar_url = str(claims.get("picture") or "")[:512]
+        else:
+            profile = self._fetch_oauth_userinfo(prov, client, meta)
+            sub = str(profile["sub"])
+            email = normalize_email(profile["email"])
+            email_verified = bool(profile["email_verified"])
+            full_name = str(profile.get("name") or email.split("@")[0])[:160]
+            avatar_url = str(profile.get("avatar_url") or "")[:512]
 
         identity = self.auth.get_identity(prov, sub)
         is_new_user = False
@@ -438,6 +591,76 @@ class AuthService:
             metadata={"provider": prov, "email_verified": email_verified},
         )
         return self._issue_session(user, is_new_user=is_new_user)
+
+    def _get_google_jwks(self) -> Any:
+        if self._google_jwks is not None:
+            if isinstance(self._google_jwks, dict):
+                return JsonWebKey.import_key_set(self._google_jwks)
+            return self._google_jwks
+
+        try:
+            resp = httpx.get(_GOOGLE_JWKS_URL, timeout=10.0)
+            resp.raise_for_status()
+            data = resp.json()
+            return JsonWebKey.import_key_set(data)
+        except Exception as exc:
+            logger.warning("Failed fetching Google JWKS from %s: %s", _GOOGLE_JWKS_URL, exc)
+            raise AuthenticationError("Unable to retrieve Google public verification keys.") from exc
+
+    def _validate_google_id_token(
+        self,
+        raw_id_token: str,
+        expected_nonce: str,
+        client_id: str,
+    ) -> Dict[str, Any]:
+        """Cryptographically validate Google OpenID Connect ID token and enforce nonce match."""
+        if not raw_id_token or not isinstance(raw_id_token, str):
+            raise AuthenticationError("Google authentication failed: missing ID token in response.")
+
+        keys = self._get_google_jwks()
+
+        claims_options = {
+            "iss": {
+                "essential": True,
+                "values": _GOOGLE_ISSUERS,
+            },
+            "aud": {
+                "essential": True,
+                "value": client_id,
+            },
+        }
+
+        try:
+            claims = jwt.decode(raw_id_token, keys, claims_options=claims_options)
+            claims.validate(leeway=120)
+        except ExpiredTokenError as exc:
+            logger.warning("Google ID token expired: %s", exc)
+            raise AuthenticationError("Google ID token has expired. Please sign in again.") from exc
+        except InvalidClaimError as exc:
+            logger.warning("Google ID token invalid claim: %s", exc)
+            raise AuthenticationError(f"Google ID token claim validation failed: {exc}") from exc
+        except (BadSignatureError, UnsupportedAlgorithmError, DecodeError) as exc:
+            logger.warning("Google ID token signature verification failed: %s", exc)
+            raise AuthenticationError("Google ID token signature verification failed.") from exc
+        except (JoseError, ValueError) as exc:
+            logger.warning("Google ID token JOSE decoding or key matching failed: %s", exc)
+            raise AuthenticationError("Google ID token could not be verified.") from exc
+
+        # Strict Nonce Validation
+        token_nonce = claims.get("nonce")
+        if not token_nonce:
+            logger.warning("Google ID token missing required nonce claim.")
+            raise AuthenticationError("Google ID token is missing required nonce claim.")
+
+        if not expected_nonce:
+            logger.warning("Pending OAuth state is missing expected nonce.")
+            raise SecurityError("OAuth state is missing expected nonce.")
+
+        if not hmac.compare_digest(str(token_nonce), str(expected_nonce)):
+            logger.warning("Google OAuth nonce mismatch.")
+            raise SecurityError("Google OAuth nonce mismatch.")
+
+        return dict(claims)
 
     def _fetch_oauth_userinfo(
         self,

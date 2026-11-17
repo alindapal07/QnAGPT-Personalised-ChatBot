@@ -107,7 +107,7 @@ def load_document_bytes(
             "file_type": ext,
         }
         if page_num is not None:
-            clean_meta["page"] = page_num
+            clean_meta["page"] = str(page_num)
         if "row" in meta:
             clean_meta["row"] = meta["row"]
 

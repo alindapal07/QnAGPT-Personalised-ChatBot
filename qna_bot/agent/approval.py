@@ -8,7 +8,7 @@ import uuid
 from qna_bot.database.connection import DatabaseManager
 from qna_bot.database.models import ApprovalRecord
 from qna_bot.database.repositories import ApprovalRepository
-from qna_bot.mcp.security import format_masked_arguments
+from qna_bot.mcp_client.security import format_masked_arguments
 
 
 def compute_arguments_hash(arguments: Mapping[str, Any]) -> str:
@@ -66,19 +66,23 @@ class ApprovalManager:
         tool_name: str,
         arguments: Mapping[str, Any],
     ) -> bool:
-        """Verify an exact backend approval match before allowing execution."""
-        record = self.repo.get(approval_id=approval_id, user_id=user_id)
-        if record is None:
-            return False
-        if record.status != "APPROVED":
-            return False
-        if record.thread_id != thread_id or record.server_id != server_id or record.tool_name != tool_name:
-            return False
-        if record.arguments_hash != compute_arguments_hash(arguments):
-            return False
+        """Verify an exact backend approval match and atomically consume it.
 
-        self.repo.decide(approval_id=approval_id, user_id=user_id, status="CONSUMED")
-        return True
+        Performs atomic validation and state transition (APPROVED -> CONSUMED)
+        directly in the database, preventing TOCTOU race conditions where concurrent
+        requests could double-consume a single approval.
+        """
+        if not approval_id or not user_id or not thread_id or not server_id or not tool_name:
+            return False
+        args_hash = compute_arguments_hash(arguments)
+        return self.repo.consume_approved(
+            approval_id=approval_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            server_id=server_id,
+            tool_name=tool_name,
+            arguments_hash=args_hash,
+        )
 
     def list_pending(
         self,

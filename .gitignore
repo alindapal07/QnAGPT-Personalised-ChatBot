@@ -13,6 +13,8 @@ htmlcov/
 # Virtual environments & secrets
 .venv/
 .env
+.streamlit/secrets.toml
+secrets.toml
 
 # Logs & OS files
 *.log
@@ -25,3 +27,6 @@ Thumbs.db
 /archive/
 *.key
 test
+reports
+tests
+storage

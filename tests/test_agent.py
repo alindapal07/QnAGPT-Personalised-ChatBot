@@ -21,8 +21,8 @@ from qna_bot.agent.routing import (
 )
 from qna_bot.config.settings import AppSettings
 from qna_bot.database.connection import DatabaseManager
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.models import ToolExecutionResult
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.models import ToolExecutionResult
 from qna_bot.rag.grader import DocumentGrader, _BatchGradeSchema
 from qna_bot.rag.ingestion import DocumentIngestor
 from qna_bot.rag.retriever import DocumentRetriever
@@ -766,5 +766,60 @@ def test_deep_web_research_pipeline_opens_pages_extracts_verifies_and_handles_fa
         assert len(res.tool_executions) == 3
     finally:
         memory.close()
+
+
+def test_agentic_turn_handles_empty_query_and_long_query(tmp_path: Path) -> None:
+    db_file = tmp_path / "agent_edge.db"
+    settings = AppSettings(
+        groq_api_key="gsk_test",
+        vector_store_dir=tmp_path / "vs",
+        langgraph_checkpoint_db=db_file,
+    )
+    memory = ConversationMemoryManager(db_path=db_file)
+    thread_id = memory.create_new_thread("alice", title="Edge Thread")
+    chat_svc = ChatService(
+        settings=settings,
+        memory_manager=memory,
+        vector_store=FAISSVectorStoreManager(
+            base_dir=tmp_path / "vs",
+            embeddings=DeterministicTestEmbeddings(),
+        ),
+    )
+
+    fake_llm = MagicMock()
+    fake_llm.invoke.return_value = AIMessage(content="Hello! How can I assist you?")
+
+    with patch("qna_bot.agent.nodes.ChatGroq", return_value=fake_llm):
+        # 1. Empty/whitespace query returns gracefully without unhandled exception
+        res_empty = chat_svc.run_agentic_turn(
+            user_query="   ",
+            thread_id=thread_id,
+            user_id="alice",
+            chat_mode="General Chat",
+            model_name="openai/gpt-oss-20b",
+            temperature=0.0,
+            max_tokens=1024,
+            system_prompt="",
+        )
+        assert res_empty is not None
+        assert isinstance(res_empty.answer, str)
+
+        # 2. Long query executes safely
+        giant_query = "What is artificial intelligence? " * 50
+        res_long = chat_svc.run_agentic_turn(
+            user_query=giant_query,
+            thread_id=thread_id,
+            user_id="alice",
+            chat_mode="General Chat",
+            model_name="openai/gpt-oss-20b",
+            temperature=0.0,
+            max_tokens=1024,
+            system_prompt="",
+        )
+        assert res_long is not None
+        assert isinstance(res_long.answer, str)
+
+    memory.close()
+
 
 

@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
+import time
 
 from alembic import command
 from alembic.config import Config
@@ -196,15 +197,40 @@ def test_oauth_config_check_csrf_state_and_verified_email_linking(tmp_path: Path
         with pytest.raises(ConfigurationError, match="GOOGLE_CLIENT_ID"):
             auth_no_cfg.start_oauth_login("google")
 
+        from authlib.jose import JsonWebKey, jwt
+        test_key = JsonWebKey.generate_key("RSA", 2048, is_private=True)
+        test_pub = test_key.as_dict(is_private=False)
+        test_pub["kid"] = "test_k1"
+        test_jwks = {"keys": [test_pub]}
+        recorded_nonce = {"val": ""}
+
         class _FakeOAuthClient:
             def __init__(self, **_kwargs) -> None:
                 pass
 
             def create_authorization_url(self, url: str, **kwargs):
+                recorded_nonce["val"] = kwargs.get("nonce", "")
                 return f"{url}?state={kwargs['state']}", kwargs["state"]
 
             def fetch_token(self, **_kwargs):
-                return {"access_token": "tok_123"}
+                now = int(time.time())
+                id_tok = jwt.encode(
+                    {"alg": "RS256", "kid": "test_k1"},
+                    {
+                        "sub": "google-sub-42",
+                        "email": "bob@company.com",
+                        "email_verified": False,
+                        "name": "Bob Unverified",
+                        "iss": "https://accounts.google.com",
+                        "aud": "gid",
+                        "nonce": recorded_nonce["val"],
+                        "exp": now + 3600,
+                        "iat": now,
+                    },
+                    test_key,
+                )
+                raw_tok = id_tok.decode("ascii") if isinstance(id_tok, bytes) else id_tok
+                return {"access_token": "tok_123", "id_token": raw_tok}
 
             def get(self, url: str):
                 if "userinfo" in url:
@@ -225,7 +251,12 @@ def test_oauth_config_check_csrf_state_and_verified_email_linking(tmp_path: Path
             google_client_id="gid",
             google_client_secret="gsec",
         )
-        auth = AuthService(db=db, settings=cfg_settings, oauth_client_factory=_FakeOAuthClient)
+        auth = AuthService(
+            db=db,
+            settings=cfg_settings,
+            oauth_client_factory=_FakeOAuthClient,
+            google_jwks=test_jwks,
+        )
         # Seed existing password account with bob@company.com
         auth.register_with_password("bob@company.com", "StrongPass1!", full_name="Bob Local")
 
@@ -343,3 +374,53 @@ def test_qdrant_isolation_durable_retry_and_faiss_migration(tmp_path: Path) -> N
         assert len(bob_hits) == 1 and bob_hits[0].source == "Payslip_9_2026.pdf"
     finally:
         db.close()
+
+
+def test_auth_edge_cases_and_security_protections(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    db = SQLAlchemyDatabase(tmp_path / "auth_edge.db", auto_create=True)
+    auth_svc = AuthService(db=db, settings=settings)
+
+    # 1. Weak password rejected by policy
+    with pytest.raises(AuthenticationError, match="Password must be at least 8 characters"):
+        auth_svc.register_with_password("valid@qnagpt.local", "weak", "Valid User")
+
+    # 2. Malformed email rejected
+    with pytest.raises(AuthenticationError):
+        auth_svc.register_with_password("not-an-email", "ValidPass123!@#", "Bad Email")
+
+    # 3. Successful registration
+    reg_res = auth_svc.register_with_password("user1@qnagpt.local", "ValidPass123!@#", "User One")
+    assert reg_res.session is not None
+    token = reg_res.session_token
+
+    # 4. Duplicate registration rejected without revealing account existence
+    with pytest.raises(AuthenticationError, match="Registration could not be completed"):
+        auth_svc.register_with_password("user1@qnagpt.local", "AnotherPass456!@#", "Duplicate User")
+
+    # 5. SQL injection in email / name handled safely via parameterized queries
+    with pytest.raises(AuthenticationError):
+        auth_svc.register_with_password("test' OR '1'='1", "ValidPass123!@#", "SQLi")
+
+    sqli_login_res = None
+    with pytest.raises(AuthenticationError):
+        auth_svc.login_with_password("admin'--", "ValidPass123!@#")
+
+    # 6. Login with nonexistent user fails cleanly
+    with pytest.raises(AuthenticationError, match="Invalid email or password"):
+        auth_svc.login_with_password("nonexistent@qnagpt.local", "ValidPass123!@#")
+
+    # 7. Login with wrong password fails cleanly
+    with pytest.raises(AuthenticationError, match="Invalid email or password"):
+        auth_svc.login_with_password("user1@qnagpt.local", "WrongPassword999!")
+
+    # 8. Valid session verification
+    verified = auth_svc.validate_session(token)
+    assert verified is not None
+    assert verified.user.email == "user1@qnagpt.local"
+
+    # 9. Logout invalidates session
+    auth_svc.logout(token)
+    assert auth_svc.validate_session(token) is None
+    db.close()
+

@@ -58,10 +58,27 @@ def initialize_session_state(
 
 
 def _derive_chat_title(messages: list[Dict[str, Any]]) -> str:
-    first_user = next(
+    raw_content = next(
         (m.get("content", "") for m in messages if m.get("role") == "user"),
         "",
     )
+    if isinstance(raw_content, list):
+        text_parts = [
+            str(item.get("text", "")).strip()
+            for item in raw_content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        has_image = any(
+            isinstance(item, dict) and ("image" in str(item.get("type", "")) or "image_url" in item)
+            for item in raw_content
+        )
+        text = " ".join(tp for tp in text_parts if tp)
+        first_user = text or ("Image Analysis" if has_image else "Conversation")
+    elif isinstance(raw_content, str):
+        first_user = " ".join(raw_content.split())
+    else:
+        first_user = " ".join(str(raw_content or "").split())
+
     if first_user and len(first_user) > _TITLE_MAX_LEN:
         return f"{first_user[:_TITLE_MAX_LEN]}..."
     return first_user or "Conversation"

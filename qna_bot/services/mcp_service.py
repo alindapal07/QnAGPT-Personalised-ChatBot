@@ -10,20 +10,20 @@ from qna_bot.config.settings import AppSettings, get_settings
 from qna_bot.database.connection import DatabaseManager
 from qna_bot.database.models import MCPServerRecord
 from qna_bot.database.repositories import AuditLogRepository
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.exceptions import MCPSecurityError
-from qna_bot.mcp.models import (
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.exceptions import MCPSecurityError
+from qna_bot.mcp_client.models import (
     DiscoveredPrompt,
     DiscoveredResource,
     DiscoveredTool,
     MCPServerStatus,
     PermissionCategory,
 )
-from qna_bot.mcp.permissions import infer_permission_category, resolve_tool_policy
-from qna_bot.mcp.registry.models import RegistryListing, RegistryPage, TransportOption
-from qna_bot.mcp.registry.service import MCPRegistryService
-from qna_bot.mcp.security import mask_secrets, validate_stdio_config
-from qna_bot.mcp.tool_registry import make_namespaced_tool_name
+from qna_bot.mcp_client.permissions import infer_permission_category, resolve_tool_policy
+from qna_bot.mcp_client.registry.models import RegistryListing, RegistryPage, TransportOption
+from qna_bot.mcp_client.registry.service import MCPRegistryService
+from qna_bot.mcp_client.security import mask_secrets, validate_stdio_config
+from qna_bot.mcp_client.tool_registry import make_namespaced_tool_name
 
 _SAFE_PKG_IDENT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9@/._\-:=]*$")
 
@@ -440,6 +440,14 @@ class MCPService:
                 "Explicit confirmation is required before launching a local STDIO MCP server."
             )
 
+        actual_auth_type = auth_type
+        if api_key.strip():
+            actual_auth_type = "api_key"
+            auth_header_name = auth_header_name if auth_header_name and auth_header_name != "Authorization" else "X-API-Key"
+        elif bearer_token.strip():
+            actual_auth_type = "bearer_token"
+            auth_header_name = auth_header_name or "Authorization"
+
         rec = self.register_server(
             user_id=user_id,
             name=listing.title or listing.name,
@@ -449,7 +457,7 @@ class MCPService:
             args=list(transport_option.args),
             env_refs=env_refs,
             url=transport_option.url,
-            auth_type=auth_type,
+            auth_type=actual_auth_type,
             auth_header_name=auth_header_name,
             auth_env_var=auth_env_var,
             allow_insecure_http=allow_insecure_http,
@@ -465,10 +473,10 @@ class MCPService:
             install_hint=transport_option.install_hint,
         )
 
-        if auth_type == "bearer_token" and bearer_token.strip():
-            self.store_bearer_token(user_id, rec.server_id, bearer_token, header_name=auth_header_name)
-        elif auth_type == "api_key" and api_key.strip():
-            self.store_api_key(user_id, rec.server_id, api_key, header_name=auth_header_name or "X-API-Key")
+        if api_key.strip():
+            self.store_api_key(user_id, rec.server_id, api_key.strip(), header_name=auth_header_name)
+        elif bearer_token.strip():
+            self.store_bearer_token(user_id, rec.server_id, bearer_token.strip(), header_name=auth_header_name)
 
         if env_secrets:
             self.store_env_secrets(user_id, rec.server_id, dict(env_secrets))

@@ -13,7 +13,7 @@ from qna_bot.agent.memory import ConversationMemoryManager
 from qna_bot.config.settings import AppSettings, get_settings
 from qna_bot.core.logging_config import get_logger
 from qna_bot.database.session import SQLAlchemyDatabase
-from qna_bot.mcp.client_manager import MCPClientManager
+from qna_bot.mcp_client.client_manager import MCPClientManager
 from qna_bot.rag.grader import DocumentGrader
 from qna_bot.rag.loaders import load_document_bytes
 from qna_bot.rag.retriever import DocumentRetriever

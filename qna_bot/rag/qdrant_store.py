@@ -312,15 +312,16 @@ class QdrantVectorStoreManager(VectorStoreBackend):
         metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[RetrievedChunk]:
         cleaned_query = (query or "").strip()
-        if not cleaned_query:
+        if not cleaned_query or top_k <= 0:
             return []
+        clamped_k = min(top_k, 100)
 
         self.ensure_collection()
         client = self._get_client()
         flt = self._build_filter(user_id, metadata_filter)
         try:
             query_vec = list(self._get_embeddings().embed_query(cleaned_query))
-            fetch_limit = max(top_k * 3, top_k) if use_mmr else max(1, top_k)
+            fetch_limit = max(clamped_k * 3, clamped_k) if use_mmr else clamped_k
             response = client.query_points(
                 collection_name=self.collection_name,
                 query=query_vec,
@@ -336,10 +337,10 @@ class QdrantVectorStoreManager(VectorStoreBackend):
         if not hits:
             return []
 
-        if use_mmr and len(hits) > top_k:
-            hits = self._apply_mmr(hits, query_vec, top_k=top_k)
+        if use_mmr and len(hits) > clamped_k:
+            hits = self._apply_mmr(hits, query_vec, top_k=clamped_k)
         else:
-            hits = hits[:top_k]
+            hits = hits[:clamped_k]
 
         results: List[RetrievedChunk] = []
         for hit in hits:

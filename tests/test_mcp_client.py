@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from qna_bot.database.connection import DatabaseManager
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.exceptions import MCPConnectionError, MCPSecurityError, MCPToolExecutionError
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.exceptions import MCPConnectionError, MCPSecurityError, MCPToolExecutionError
 
 
 class _FakeMCPSession:
@@ -130,7 +130,7 @@ def test_mcp_client_lifecycle_discovery_execution_and_user_isolation(tmp_path: P
 
     mgr = MCPClientManager(db_manager=db, session_factory=_fake_factory)
     try:
-        with patch("qna_bot.mcp.client_manager.MCPConnectionHandle", _MockHandle):
+        with patch("qna_bot.mcp_client.client_manager.MCPConnectionHandle", _MockHandle):
             rec = mgr.register_server(
                 user_id="alice",
                 name="SQLite Analytics",
@@ -200,7 +200,7 @@ def test_mcp_client_handles_connection_and_tool_errors(tmp_path: Path) -> None:
 
     mgr = MCPClientManager(db_manager=db, session_factory=_failing_factory)
     try:
-        with patch("qna_bot.mcp.client_manager.MCPConnectionHandle", _MockHandle):
+        with patch("qna_bot.mcp_client.client_manager.MCPConnectionHandle", _MockHandle):
             with pytest.raises(MCPSecurityError):
                 mgr.register_server("alice", "Bad Local", "stdio", command="cmd", args=["/c", "dir"])
 
@@ -217,3 +217,40 @@ def test_mcp_client_handles_connection_and_tool_errors(tmp_path: Path) -> None:
                 mgr.execute_tool("alice", "down_server__missing", {})
     finally:
         db.close()
+
+
+def test_mcp_client_user_isolation_and_empty_capabilities(tmp_path: Path) -> None:
+    db = DatabaseManager(db_path=tmp_path / "mcp_iso.db")
+
+    class _EmptyMCPSession:
+        async def list_tools(self):
+            return SimpleNamespace(tools=[])
+        async def list_resources(self):
+            return SimpleNamespace(resources=[])
+        async def list_prompts(self):
+            return SimpleNamespace(prompts=[])
+        async def send_ping(self):
+            return {}
+
+    async def _empty_factory(rec, stack):
+        return _EmptyMCPSession()
+
+    mgr = MCPClientManager(db_manager=db, session_factory=_empty_factory)
+    try:
+        with patch("qna_bot.mcp_client.client_manager.MCPConnectionHandle", _MockHandle):
+            rec = mgr.register_server("alice", "Empty Server", "stdio", command="python", args=["-m", "empty"])
+            status = mgr.connect_server(rec.server_id, "alice")
+            assert status.connected is True
+            assert status.tool_count == 0
+
+            # Tools for Alice are empty
+            assert mgr.list_available_tools("alice") == []
+
+            # User Bob cannot access Alice's server or status
+            assert mgr.get_all_server_statuses("bob") == []
+            from qna_bot.mcp_client.exceptions import MCPError
+            with pytest.raises(MCPError, match="not found for user"):
+                mgr.get_server_status(rec.server_id, "bob")
+    finally:
+        db.close()
+

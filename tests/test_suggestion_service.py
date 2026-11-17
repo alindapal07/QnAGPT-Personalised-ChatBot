@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 from qna_bot.agent.memory import ConversationMemoryManager
 from qna_bot.config.settings import AppSettings
 from qna_bot.database.connection import DatabaseManager
-from qna_bot.mcp.client_manager import MCPClientManager
+from qna_bot.mcp_client.client_manager import MCPClientManager
 from qna_bot.rag.ingestion import DocumentIngestor
 from qna_bot.rag.vector_store import FAISSVectorStoreManager
 from qna_bot.services.conversation_service import ConversationService

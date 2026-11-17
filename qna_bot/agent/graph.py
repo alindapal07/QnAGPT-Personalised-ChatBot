@@ -23,7 +23,7 @@ from qna_bot.agent.routing import (
 from qna_bot.agent.state import AgentState
 from qna_bot.config.settings import AppSettings, get_settings
 from qna_bot.database.repositories import AuditLogRepository
-from qna_bot.mcp.client_manager import MCPClientManager
+from qna_bot.mcp_client.client_manager import MCPClientManager
 from qna_bot.rag.crag import CRAGPipeline
 from qna_bot.rag.grader import DocumentGrader
 from qna_bot.rag.retriever import DocumentRetriever

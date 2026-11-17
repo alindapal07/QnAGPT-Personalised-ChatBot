@@ -8,11 +8,13 @@ import streamlit as st
 
 from qna_bot.config.settings import AppSettings
 from qna_bot.core.exceptions import AuthenticationError, ConfigurationError, SecurityError
+from qna_bot.core.security import normalize_client_identifier
 from qna_bot.rag.qdrant_store import QdrantVectorStoreManager, migrate_faiss_user_to_qdrant
 from qna_bot.schemas.auth import AuthenticatedSession, AuthResult
 from qna_bot.services.auth_service import AuthService
 from qna_bot.services.user_service import UserService
 from qna_bot.ui.design_system import (
+    BRAND_AI_SPARK_SVG,
     BRAND_SVG,
     render_html,
     render_metric_strip,
@@ -58,7 +60,14 @@ def handle_oauth_callback_params(
     except Exception:
         return None
 
-    if not provider:
+    # Resolve provider from active CSRF state if not explicitly passed by provider (e.g. Google)
+    if not provider and state:
+        resolved = auth_service.resolve_provider_from_state(state)
+        if resolved:
+            provider = resolved
+
+    # If neither provider nor OAuth callback parameters exist, skip processing
+    if not provider and not (code and state) and not err:
         return None
 
     try:
@@ -67,16 +76,50 @@ def handle_oauth_callback_params(
         pass
 
     if err:
-        return f"{provider.title()} sign-in was cancelled or denied: {err}"
+        return f"{(provider or 'OAuth').title()} sign-in was cancelled or denied: {err}"
     if not code or not state:
-        return f"Incomplete {provider.title()} callback parameters."
+        return f"Incomplete {(provider or 'OAuth').title()} callback parameters."
 
     try:
         res = auth_service.complete_oauth_login(provider=provider, code=code, state=state)
         _apply_auth_result(res, user_service)
+        st.session_state.pop("_google_auth_url", None)
+        st.session_state.pop("_github_auth_url", None)
+        st.rerun()
         return None
     except Exception as exc:
         return str(exc)
+
+
+def _resolve_ui_client_key(settings: AppSettings) -> str:
+    """Derive a normalized, privacy-preserving client key for the current Streamlit session."""
+    ip = None
+    try:
+        ip = getattr(st.context, "ip_address", None)
+    except Exception:
+        pass
+
+    session_id = None
+    try:
+        if "_auth_client_id" not in st.session_state:
+            import secrets
+            st.session_state["_auth_client_id"] = secrets.token_hex(16)
+        session_id = st.session_state["_auth_client_id"]
+    except Exception:
+        pass
+
+    headers = None
+    try:
+        headers = dict(getattr(st.context, "headers", {}) or {})
+    except Exception:
+        pass
+
+    return normalize_client_identifier(
+        client_raw=ip,
+        trusted_proxies=getattr(settings, "trusted_proxies", ""),
+        headers=headers,
+        session_id=session_id,
+    )
 
 
 def render_auth_gate(
@@ -86,13 +129,14 @@ def render_auth_gate(
     oauth_error: Optional[str] = None,
 ) -> None:
     """Render the clean SaaS Login / Registration gate when no valid backend session is active."""
+    client_key = _resolve_ui_client_key(settings)
     _, center_col, _ = st.columns([1.15, 1.7, 1.15])
     with center_col:
         render_html(
             f'<div style="text-align:center;margin:18px 0 18px;">'
-            f'<div style="display:inline-flex;align-items:center;gap:10px;">{BRAND_SVG}'
-            f'<span style="font-size:24px;font-weight:700;letter-spacing:-0.02em;color:#172033;">QnAGPT</span></div>'
-            f'<div style="font-size:13.5px;color:#64748B;margin-top:6px;">'
+            f'<div style="display:inline-flex;align-items:center;gap:10px;">{BRAND_AI_SPARK_SVG}'
+            f'<span style="font-size:24px;font-weight:700;letter-spacing:-0.02em;color:#202333;">QnAGPT</span></div>'
+            f'<div style="font-size:13.5px;color:#73798C;margin-top:6px;">'
             f"Sign in to access your isolated Knowledge Base, conversations, and MCP workspace."
             f"</div></div>"
         )
@@ -114,7 +158,11 @@ def render_auth_gate(
                     )
                 if submitted:
                     try:
-                        res = auth_service.login_with_password(email=email, password=password)
+                        res = auth_service.login_with_password(
+                            email=email,
+                            password=password,
+                            client_key=client_key,
+                        )
                         _apply_auth_result(res, user_service)
                         st.rerun()
                     except (AuthenticationError, SecurityError) as exc:
@@ -128,14 +176,16 @@ def render_auth_gate(
                         if st.button("Continue with Google", use_container_width=True, key="btn_oauth_google"):
                             try:
                                 start_res = auth_service.start_oauth_login("google")
-                                st.link_button(
-                                    "Open Google Consent",
-                                    start_res.authorization_url,
-                                    type="primary",
-                                    use_container_width=True,
-                                )
+                                st.session_state["_google_auth_url"] = start_res.authorization_url
                             except ConfigurationError as exc:
                                 st.info(str(exc))
+                        if st.session_state.get("_google_auth_url"):
+                            st.link_button(
+                                "Proceed to Google Sign-In",
+                                st.session_state["_google_auth_url"],
+                                type="primary",
+                                use_container_width=True,
+                            )
                     else:
                         st.button(
                             "Google OAuth",
@@ -149,14 +199,16 @@ def render_auth_gate(
                         if st.button("Continue with GitHub", use_container_width=True, key="btn_oauth_github"):
                             try:
                                 start_res = auth_service.start_oauth_login("github")
-                                st.link_button(
-                                    "Open GitHub Consent",
-                                    start_res.authorization_url,
-                                    type="primary",
-                                    use_container_width=True,
-                                )
+                                st.session_state["_github_auth_url"] = start_res.authorization_url
                             except ConfigurationError as exc:
                                 st.info(str(exc))
+                        if st.session_state.get("_github_auth_url"):
+                            st.link_button(
+                                "Proceed to GitHub Sign-In",
+                                st.session_state["_github_auth_url"],
+                                type="primary",
+                                use_container_width=True,
+                            )
                     else:
                         st.button(
                             "GitHub OAuth",
@@ -166,7 +218,22 @@ def render_auth_gate(
                             help="Add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to .env to enable GitHub Sign-In.",
                         )
 
-                if not (auth_service.is_oauth_configured("google") or auth_service.is_oauth_configured("github")):
+                if auth_service.is_oauth_configured("google") or auth_service.is_oauth_configured("github"):
+                    with st.expander("OAuth Redirect Configuration & Setup", expanded=False):
+                        if auth_service.is_oauth_configured("google"):
+                            g_uri = auth_service.oauth_redirect_uri("google")
+                            st.markdown(
+                                f"**Google Cloud Console Authorized Redirect URI:**\n\n"
+                                f"```text\n{g_uri}\n```\n"
+                                f"*Ensure this exact URI is listed under **Authorized redirect URIs** in your Google Cloud Console Web Application credentials.*"
+                            )
+                        if auth_service.is_oauth_configured("github"):
+                            gh_uri = auth_service.oauth_redirect_uri("github")
+                            st.markdown(
+                                f"**GitHub Authorized Callback URL:**\n\n"
+                                f"```text\n{gh_uri}\n```"
+                            )
+                else:
                     st.caption(
                         "OAuth sign-in activates automatically once `GOOGLE_CLIENT_ID`/`SECRET` or "
                         "`GITHUB_CLIENT_ID`/`SECRET` are configured in `.env`."
@@ -197,10 +264,11 @@ def render_auth_gate(
                                 email=reg_email,
                                 password=reg_pw,
                                 full_name=reg_name,
+                                client_key=client_key,
                             )
                             _apply_auth_result(res, user_service)
                             st.rerun()
-                        except AuthenticationError as exc:
+                        except (AuthenticationError, SecurityError) as exc:
                             st.error(str(exc))
 
 

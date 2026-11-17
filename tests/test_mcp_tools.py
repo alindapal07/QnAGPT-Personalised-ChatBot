@@ -12,9 +12,9 @@ from qna_bot.agent.mcp_adapter import (
     validate_tool_arguments,
 )
 from qna_bot.database.connection import DatabaseManager
-from qna_bot.mcp.client_manager import MCPClientManager
-from qna_bot.mcp.models import DiscoveredTool
-from qna_bot.mcp.tool_registry import make_namespaced_tool_name
+from qna_bot.mcp_client.client_manager import MCPClientManager
+from qna_bot.mcp_client.models import DiscoveredTool
+from qna_bot.mcp_client.tool_registry import make_namespaced_tool_name
 
 
 def test_namespaced_tool_naming_and_schema_validation() -> None:
